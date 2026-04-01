@@ -1,0 +1,140 @@
+Ecco la lista COMPLETA di tutto ciò che l'avatar può fare, basata sul codice sorgente originale di TalkingHead (met4citizen/TalkingHead):
+---
+😊 EMOJI → ESPRESSIONI FACCIALI (55 totali)
+L'avatar riconosce automaticamente le emoji nel testo parlato e le converte in espressioni facciali animate.
+😐 Neutre / Senza espressione
+Emoji	Nome
+😐	Straight face
+😶	Senza parole
+😏 Sorrisetti / Smorfie
+Emoji	Nome
+😏	Smirk
+😒	Unamused
+🙂 Leggermente felici
+Emoji
+🙂
+🙃
+😊 Calde / Arrossite
+Emoji	Nome
+😊	Warm smile
+😇	Angelo
+🥰	Cuoricini
+😀 Grignare / Sorridere largo
+Emoji	Nome
+😀	Grinning
+😃	Big eyes grin
+😄	Smiling eyes
+😁	Beaming grin
+😆	Squinting laugh
+😍	Heart eyes
+🤩	Star-struck
+😝 Lingua fuori / Giocose
+Emoji	Nome
+😝	Tongue out
+😋	Yum
+😛	Tongue out simple
+😜	Winking tongue
+🤪	Zany
+😂 Ridere / Piangere
+Emoji	Nome
+😂	Laughing tears
+🤣	ROFL
+😅	Nervous sweat
+😉 Ammiccare
+Emoji	Nome
+😉	Wink
+😭 Piangere / Tristezza
+Emoji	Nome
+😭	Loud crying
+🥺	Pleading
+😞	Disappointed
+😔	Pensive
+☹️	Frowning
+😳 Imbarazzo
+Emoji	Nome
+😳	Flushed
+💋 Baci
+Emoji	Nome
+😚	Kissing closed eyes
+😘	Blowing kiss
+😡 Rabbia
+Emoji	Nome
+😡	Pouting angry
+😠	Angry
+🤬	Cursing
+😱 Paura / Shock
+Emoji	Nome
+😱	Screaming fear
+😬 Smorfie
+Emoji	Nome
+😬	Grimace
+🙄 Occhi al cielo
+Emoji	Nome
+🙄	Eye roll
+🤔 Pensiero
+Emoji	Nome
+🤔	Thinking
+👀 Occhi
+Emoji
+👀
+😴 Sonno
+Emoji	Nome
+😴	Sleeping
+✋ Gesti con le mani
+Emoji	Nome
+✋	Hand up
+👋	Waving
+🤚	Back of hand
+👍	Thumbs up
+👎	Thumbs down
+👌	OK
+🤷‍♂️	Shrug
+🤷‍♀️	Shrug F
+🤷	Shrug
+🙏	Namaste
+📝 Token testuali speciali
+Token
+yes
+no
+---
+🎭 MOOD PERSISTENTI (8 totali)
+Stati d'animo di base che cambiano l'espressione predefinita dell'avatar:
+Mood	Descrizione
+neutral	Rilassato, occhi leggermente giù, respiro normale
+happy	Sorriso 0.2, occhi giù, tono voce più alto
+angry	Sopracciglio giù, mascella avanti, broncio, respirazione veloce
+sad	Sopracciglio interno su, socchiuso, broncio, testa giù
+fear	Sopracciglio su, occhi spalancati, bocca a imbuto
+disgust	Naso arricciato, bocca storta
+love	Sorriso caldo, occhi socchiusi
+sleep	Occhi chiusi, testa inclinata
+---
+🧍 POSE (11 totali)
+Da siteconfig.js + pose interne di TalkingHead:
+Pose
+Straight
+Side
+Hip
+Turn
+Back
+Wide
+OneKnee
+TwoKnees
+Bend
+Sitting
+Dance
+---
+🤟 GESTI (8 totali)
+Gesture	Key
+HandUp	handup
+OK	ok
+Index	index
+ThumbUp	thumbup
+ThumbDown	thumbdown
+Side	side
+Shrug	shrug
+Namaste	namaste
+---
+🎬 ANIMAZIONI
+Animazione
+Walking

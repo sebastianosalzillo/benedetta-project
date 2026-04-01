@@ -1,0 +1,4 @@
+kokoro>=0.7.0
+numpy
+torch>=2.0.0
+soundfile
