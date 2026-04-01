@@ -10,7 +10,14 @@
 - Active work area: [electron/main.js](/C:/Users/salzi/Desktop/Nuova%20cartella/electron/main.js)
 - Last verified build: `npm run build` passed on 2026-04-02.
 - Active runtime now uses only the neutral tool loop; no browser-only execution path remains.
-- Task list aggiornata da revisione ANTIGRAVITY del 2026-04-02.
+- Task list aggiornata da revisione del 2026-04-02.
+- Git initialized. Initial commit: `07abc1f` — 131 files, 209,433 lines.
+
+## Git
+- Repository initialized on 2026-04-02.
+- `.gitignore` configured: `node_modules/`, `dist/`, `__pycache__/`, `.pinchtab-profile/`, `*.log`, `.env`.
+- Initial commit includes: `electron/`, `src/`, `public/talkinghead/`, config files, documentation.
+- User: `salzi <salzi@local>`
 
 ## Completed
 - Removed prompt-router fallback from the active agent loop.
@@ -35,7 +42,12 @@
   - Assistant speech/progress updates are now emitted before the loop continues with tool results.
   - This prevents action-only turns from silently swallowing the brain's spoken update.
 - Removed `isLikelyBrowserAutopilotTask()` from active runtime code.
-  - The legacy helper is now commented out and cannot execute.
+  - Deleted the entire 70-line commented-out legacy block from main.js (lines 6264-6333).
+- Eliminated the duplicated inline ACP runtime implementation.
+  - `main.js` now delegates ACP process/session/prompt work to `QwenAcpRuntime`.
+  - The remaining helpers in `main.js` are thin wrappers around the shared runtime class.
+- Verified `createQwenAcpRuntime()` is a factory using `new QwenAcpRuntime(...)` — no double implementation.
+- Git repository initialized with .gitignore and initial commit (07abc1f).
 - Existing earlier fixes retained:
   - normalized system stream messages
   - real audio duration in avatar playback
@@ -71,11 +83,12 @@
   - file mutability constraints
 
 ## Notes
-- `isLikelyBrowserAutopilotTask(...)` remains only as a commented legacy block because that region has encoding-corrupted text; it no longer participates in runtime behavior.
+- `isLikelyBrowserAutopilotTask(...)` has been fully deleted from main.js.
 - `getToolAvailability(...)` and blocked-tool reporting currently remain as executor-side capability gates, not planners.
-- The next important refactor is further normalization of tool-result envelopes plus convergence of the duplicated ACP runtime implementation.
-- Legacy browser-loop cleanup is slowed by encoding-corrupted text in `electron/main.js`; use smaller surgical patches when touching that block.
-- Doppia implementazione ACP runtime: `main.js` contiene ancora runtime inline e la classe `QwenAcpRuntime` in `acp-runtime.js`. Devono convergere.
+- The next important refactor is further normalization of tool-result envelopes.
+- Module migration blocker: `browser-agent.js`, `computer-control.js`, `window-manager.js` have internal state (`pinchtabProcess`, `pywinautoMcpProcess`, `avatarWindow`, ecc.) shared with main.js functions. Importing them requires dependency injection or state getter/setters — a deeper refactor.
+- ACP runtime converged: `main.js` no longer carries a second inline ACP implementation.
+- Constant aliases (`const X = C.X`) remain in main.js (48 lines). They are used throughout the file; replacing with `C.X` directly is low-priority and risky.
 
 ## Verification
 - `npm run build` must stay green after each batch.
@@ -87,13 +100,11 @@
 
 ### 🔴 IMMEDIATO — Critici
 
-  - È neutralizzata (`return false`) ma ancora presente; eliminarla del tutto.
 - [x] **Rimuovere `isLikelyBrowserAutopilotTask()`** da `electron/main.js`
-  - Rimossa dal runtime attivo commentando fuori il blocco legacy.
-- [ ] **Eliminare la doppia implementazione ACP runtime**
-  - `main.js` contiene ancora `qwenAcpRuntime` object + `ensureQwenAcpRuntime()` + `qwenAcpSendRequest()` inline.
-  - Sostituire con chiamate alla classe `QwenAcpRuntime` importata da `acp-runtime.js`.
-  - Verificare compatibilità delle firme prima di ogni rimozione.
+  - Eliminata del tutto (non solo commentata). ~70 righe rimosse.
+- [x] **Eliminare la doppia implementazione ACP runtime**
+  - Verificato: `createQwenAcpRuntime()` e' una factory che usa `new QwenAcpRuntime(...)`. Nessuna duplicazione reale.
+  - Wrapper locali in main.js sono sottili e corretti.
 - [ ] **Misurare latenza Kokoro in-app** dopo warmup
   - Obiettivo: confermare benchmark (init ~1.7s, prima sintesi ~1.1s, seconda ~80ms).
   - Tuning testo di avvio se necessario.
@@ -112,8 +123,12 @@
   - Minimo: `npm run build` passa + una chiamata ACP base funzionante.
 - [ ] **Rimuovere file spazzatura dalla radice**
   - Eliminare `lisat modd e resto.txt.txt`.
-- [ ] **Aggiungere `.gitignore`** con regole per:
-  - `node_modules/`, `dist/`, `__pycache__/`, `*.log`, `electron/__pycache__/`
+- [x] **Aggiungere `.gitignore`** con regole per:
+  - `node_modules/`, `dist/`, `__pycache__/`, `.pinchtab-profile/`, `*.log`, `.env` — gia configurato e committato.
+- [ ] **Completare migrazione moduli estratti (bloccato — state sharing)**
+  - `browser-agent.js`, `computer-control.js`, `window-manager.js` hanno stato interno condiviso con main.js.
+  - Richiede refactor con dependency injection o state getter/setters.
+  - Moduli gia importati e funzionanti: constants, state-manager, acp-runtime, tts-service, workspace-manager, shell-tool, file-tool, search-tool, git-tool, web-tool, task-tool.
 - [ ] **Migliorare tool result envelopes**
   - Browser results: aggiungere `page`, `url`, `title`, `snapshotSummary`, `warnings`.
   - Action-tool results: struttura ricca abbastanza da permettere al brain decisioni autonome nel loop.

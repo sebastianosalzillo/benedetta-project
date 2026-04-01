@@ -265,21 +265,30 @@ let computerState = createDefaultComputerState();
 let workspaceState = createDefaultWorkspaceState();
 let brainState = createDefaultBrainState();
 let brainSessionHints = {};
-function createDefaultQwenAcpRuntime() {
-  return {
-    proc: null,
-    initialized: false,
-    stdoutBuffer: '',
-    stderrTail: '',
-    pending: new Map(),
-    nextRequestId: 1,
-    loadedSessionId: '',
-    currentTurn: null,
-    readyPromise: null,
-  };
+function createQwenAcpRuntime() {
+  const selectedBrain = getSelectedBrainOption();
+  const useNodeLauncher = fs.existsSync(QWEN_CLI_JS_PATH);
+  const launcherCommand = useNodeLauncher
+    ? 'node'
+    : String(selectedBrain?.commandPath || BRAIN_REGISTRY.qwen.command || 'qwen');
+  const launcherArgs = useNodeLauncher
+    ? [QWEN_CLI_JS_PATH, '--acp', '--channel', 'ACP']
+    : ['--acp', '--channel', 'ACP'];
+
+  return new QwenAcpRuntime({
+    cwd: path.join(__dirname, '..'),
+    reasoningTagNames: REASONING_TAG_NAMES,
+    requestTimeoutMs: ACP_TIMEOUT_MS,
+    launcherCommand,
+    launcherArgs,
+    onStderrAppend: appendQwenAcpStderr,
+    onStreamChunk: (delta) => {
+      activeChatRequest?.streamEmitter?.queue(delta);
+    },
+  });
 }
 
-let qwenAcpRuntime = createDefaultQwenAcpRuntime();
+let qwenAcpRuntime = null;
 let bootstrapState = createDefaultBootstrapState();
 let avatarPlaybackWaiters = new Map();
 
@@ -638,279 +647,45 @@ function markBrainSessionActive(brainId) {
 
 function resetBrainRuntimeState() {
   brainSessionHints = {};
-  qwenAcpRuntime.loadedSessionId = '';
+  qwenAcpRuntime?.clearLoadedSessionId();
 }
 
-// waitForLocalPort, appendQwenAcpStderr, qwenAcpContentBlockToText, syncAcpSessionToQwen, handleQwenAcpMessage
-// moved to acp-runtime.js - kept here for backward compatibility with existing code paths
-
-function qwenAcpContentBlockToText(block) {
-  if (!block) return '';
-  if (typeof block === 'string') return block;
-  if (typeof block.text === 'string') return block.text;
-  if (Array.isArray(block.content)) {
-    return block.content.map((item) => qwenAcpContentBlockToText(item)).filter(Boolean).join('');
-  }
-  if (typeof block.content === 'string') return block.content;
-  if (block.content && typeof block.content.text === 'string') return block.content.text;
-  return '';
-}
-
-function handleQwenAcpMessage(message) {
-  if (!message || typeof message !== 'object') return;
-
-  if (Object.prototype.hasOwnProperty.call(message, 'id')) {
-    const pending = qwenAcpRuntime.pending.get(message.id);
-    if (!pending) return;
-    qwenAcpRuntime.pending.delete(message.id);
-    if (message.error) {
-      pending.reject(new Error(normalizeLine(message.error.message || JSON.stringify(message.error), 400)));
-      return;
-    }
-    pending.resolve(message.result);
-    return;
-  }
-
-  if (message.method !== 'session/update') return;
-
-  const sessionId = String(message.params?.sessionId || '').trim();
-  const update = message.params?.update || {};
-  const turn = qwenAcpRuntime.currentTurn;
-  if (!turn || !sessionId || turn.sessionId !== sessionId) return;
-
-  if (update.sessionUpdate === 'agent_message_chunk') {
-    const chunkText = qwenAcpContentBlockToText(update.content);
-    if (!chunkText) return;
-    turn.buffer += chunkText;
-    if (!turn.streamPreview) return;
-    const reasoningTagNames = ['think', 'thought', 'reasoning', 'analysis', 'internal', 'plan'];
-    let preview = String(turn.buffer || '');
-    preview = preview.replace(/<\|ACT[\s\S]*?\|>/gi, '');
-    preview = preview.replace(/<\|CANVAS[\s\S]*?\|>/gi, '');
-    preview = preview.replace(/<\|BROWSER[\s\S]*?\|>/gi, '');
-    preview = preview.replace(/<\|COMPUTER[\s\S]*?\|>/gi, '');
-    preview = preview.replace(/<\|WORKSPACE[\s\S]*?\|>/gi, '');
-    preview = preview.replace(/<\|DELAY:\s*\d+(?:\.\d+)?\|>/gi, '');
-    for (const tagName of reasoningTagNames) {
-      preview = preview.replace(new RegExp(`<${tagName}>[\\s\\S]*?</${tagName}>`, 'gi'), '');
-    }
-    preview = preview.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
-    if (preview.length > turn.preview.length && preview.startsWith(turn.preview)) {
-      const delta = preview.slice(turn.preview.length);
-      turn.preview = preview;
-      activeChatRequest?.streamEmitter?.queue(delta);
-    } else if (!turn.preview && preview) {
-      turn.preview = preview;
-      activeChatRequest?.streamEmitter?.queue(preview);
-    }
-    return;
-  }
-
-  if (update.sessionUpdate === 'agent_thought_chunk') {
-    const chunkText = qwenAcpContentBlockToText(update.content);
-    if (chunkText) turn.reasoning += chunkText;
-    return;
-  }
-
-  if (update.sessionUpdate === 'session_info_update') {
-    const nextSessionId = String(update.sessionId || update.id || sessionId || '').trim();
-    if (nextSessionId && nextSessionId !== turn.sessionId) {
-      turn.sessionId = nextSessionId;
-    }
-  }
-}
+// waitForLocalPort, appendQwenAcpStderr, syncAcpSessionToQwen
+// moved to acp-runtime.js - main.js now uses thin wrappers around QwenAcpRuntime
 
 function stopQwenAcpRuntime(silent = false) {
-  const runtime = qwenAcpRuntime;
-  if (runtime.proc) {
-    try {
-      runtime.proc.kill();
-    } catch {
-      // ignore cleanup errors
-    }
-  }
-
-  const stopError = silent ? null : new Error('Qwen ACP arrestato.');
-  for (const pending of runtime.pending.values()) {
-    if (stopError) {
-      pending.reject(stopError);
-    } else {
-      pending.resolve({ cancelled: true });
-    }
-  }
-
-  qwenAcpRuntime = createDefaultQwenAcpRuntime();
+  qwenAcpRuntime?.stop(silent);
+  qwenAcpRuntime = null;
 }
 
 function qwenAcpSendNotification(method, params = null) {
-  if (!qwenAcpRuntime.proc || qwenAcpRuntime.proc.killed) {
+  if (!qwenAcpRuntime) {
     throw new Error('Qwen ACP non disponibile.');
   }
-
-  qwenAcpRuntime.proc.stdin.write(`${JSON.stringify({
-    jsonrpc: '2.0',
-    method,
-    ...(params == null ? {} : { params }),
-  })}\n`);
+  qwenAcpRuntime.sendNotification(method, params);
 }
 
 function qwenAcpSendRequest(method, params = null, timeoutMs = ACP_TIMEOUT_MS) {
-  if (!qwenAcpRuntime.proc || qwenAcpRuntime.proc.killed) {
+  if (!qwenAcpRuntime) {
     return Promise.reject(new Error('Qwen ACP non disponibile.'));
   }
-
-  const id = qwenAcpRuntime.nextRequestId += 1;
-  const payload = {
-    jsonrpc: '2.0',
-    id,
-    method,
-    ...(params == null ? {} : { params }),
-  };
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      qwenAcpRuntime.pending.delete(id);
-      reject(new Error(`Qwen ACP request timeout: ${method} (${timeoutMs}ms)`));
-    }, timeoutMs);
-
-    qwenAcpRuntime.pending.set(id, {
-      resolve: (value) => { clearTimeout(timeout); resolve(value); },
-      reject: (error) => { clearTimeout(timeout); reject(error); },
-      method,
-    });
-    try {
-      qwenAcpRuntime.proc.stdin.write(`${JSON.stringify(payload)}\n`);
-    } catch (error) {
-      qwenAcpRuntime.pending.delete(id);
-      clearTimeout(timeout);
-      reject(error);
-    }
-  });
+  return qwenAcpRuntime.sendRequest(method, params, timeoutMs);
 }
 
 async function ensureQwenAcpRuntime() {
-  if (qwenAcpRuntime.proc && !qwenAcpRuntime.proc.killed && qwenAcpRuntime.initialized) {
-    return qwenAcpRuntime;
+  const hasLiveRuntime = Boolean(qwenAcpRuntime?.proc && !qwenAcpRuntime.proc.killed);
+  if (!hasLiveRuntime) {
+    qwenAcpRuntime = createQwenAcpRuntime();
   }
-
-  if (qwenAcpRuntime.readyPromise) {
-    return qwenAcpRuntime.readyPromise;
-  }
-
-  qwenAcpRuntime.readyPromise = (async () => {
-    stopQwenAcpRuntime(true);
-    qwenAcpRuntime.readyPromise = null;
-
-    const selectedBrain = getSelectedBrainOption();
-    const useNodeLauncher = fs.existsSync(QWEN_CLI_JS_PATH);
-    const command = useNodeLauncher ? 'node' : String(selectedBrain?.commandPath || BRAIN_REGISTRY.qwen.command || 'qwen');
-    const args = useNodeLauncher
-      ? [QWEN_CLI_JS_PATH, '--acp', '--channel', 'ACP']
-      : ['--acp', '--channel', 'ACP'];
-
-    const proc = spawn(command, args, {
-      cwd: path.join(__dirname, '..'),
-      env: process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      shell: false,
-    });
-
-    qwenAcpRuntime.proc = proc;
-    qwenAcpRuntime.initialized = false;
-    qwenAcpRuntime.stdoutBuffer = '';
-    qwenAcpRuntime.stderrTail = '';
-    qwenAcpRuntime.pending = new Map();
-    qwenAcpRuntime.nextRequestId = 1;
-    qwenAcpRuntime.loadedSessionId = '';
-    qwenAcpRuntime.currentTurn = null;
-
-    proc.stdout.on('data', (chunk) => {
-      qwenAcpRuntime.stdoutBuffer += String(chunk || '');
-      let newlineIndex = qwenAcpRuntime.stdoutBuffer.indexOf('\n');
-      while (newlineIndex !== -1) {
-        const rawLine = qwenAcpRuntime.stdoutBuffer.slice(0, newlineIndex).trim();
-        qwenAcpRuntime.stdoutBuffer = qwenAcpRuntime.stdoutBuffer.slice(newlineIndex + 1);
-        if (rawLine) {
-          try {
-            handleQwenAcpMessage(JSON.parse(rawLine));
-          } catch (error) {
-            appendQwenAcpStderr(`ACP parse error: ${error.message}. Line: ${rawLine.slice(0, 500)}`);
-          }
-        }
-        newlineIndex = qwenAcpRuntime.stdoutBuffer.indexOf('\n');
-      }
-    });
-
-    proc.stderr.on('data', appendQwenAcpStderr);
-    proc.on('error', (error) => {
-      appendQwenAcpStderr(error.message);
-    });
-    proc.on('close', (code) => {
-      if (qwenAcpRuntime.proc !== proc) {
-        return;
-      }
-      const isNormalExit = code === 0 || code === 143 || code === null;
-      if (isNormalExit) {
-        for (const pending of qwenAcpRuntime.pending.values()) {
-          pending.resolve({ cancelled: true, reason: 'process_closed' });
-        }
-      } else {
-        const exitError = new Error(normalizeLine(qwenAcpRuntime.stderrTail || `Qwen ACP exited with code ${code}`, 400));
-        for (const pending of qwenAcpRuntime.pending.values()) {
-          pending.reject(exitError);
-        }
-      }
-      qwenAcpRuntime = createDefaultQwenAcpRuntime();
-    });
-
-    const initResult = await qwenAcpSendRequest('initialize', {
-      protocolVersion: 1,
-      clientInfo: {
-        name: 'avatar-acp-desktop',
-        version: '0.1.0',
-      },
-      clientCapabilities: {
-        fs: { readTextFile: false, writeTextFile: false },
-        terminal: false,
-      },
-    });
-
-    qwenAcpRuntime.initialized = true;
-    qwenAcpRuntime.readyPromise = null;
-
-    if (!initResult?.agentInfo?.name) {
-      appendQwenAcpStderr('Qwen ACP initialize completato senza agentInfo esplicito.');
-    }
-
-    return qwenAcpRuntime;
-  })().catch((error) => {
-    qwenAcpRuntime.readyPromise = null;
-    stopQwenAcpRuntime(true);
-    throw error;
-  });
-
-  return qwenAcpRuntime.readyPromise;
+  await qwenAcpRuntime.ensure();
+  return qwenAcpRuntime;
 }
 
 async function ensureQwenAcpSession(sessionConfig = {}) {
   await ensureQwenAcpRuntime();
 
   // Se c'è già una sessione caricata, riutilizzala
-  if (qwenAcpRuntime.loadedSessionId && qwenAcpRuntime.initialized) {
-    return qwenAcpRuntime.loadedSessionId;
-  }
-
-  // Altrimenti crea una nuova sessione
-  const result = await qwenAcpSendRequest('session/new', {
-    cwd: path.join(__dirname, '..'),
-    mcpServers: [],
-  });
-  const sessionId = String(result?.sessionId || '').trim();
-  if (!sessionId) {
-    throw new Error('Qwen ACP non ha restituito un sessionId valido.');
-  }
-  if (qwenAcpRuntime) qwenAcpRuntime.loadedSessionId = sessionId;
+  const sessionId = await qwenAcpRuntime.ensureSession();
   syncAcpSessionToQwen(sessionId, true);
   return sessionId;
 }
@@ -924,7 +699,7 @@ async function runQwenAcpTurn(requestId, prompt, userText, sessionConfig, option
     // Se fallisce, resetta e riprova una volta sola
     if (!options.qwenSessionResetAttempted) {
       resetAcpSession(sessionConfig.id);
-      if (qwenAcpRuntime) qwenAcpRuntime.loadedSessionId = '';
+      qwenAcpRuntime?.clearLoadedSessionId();
       return runQwenAcpTurn(requestId, prompt, userText, prepareAcpSessionTurn(), {
         ...options,
         qwenSessionResetAttempted: true,
@@ -969,25 +744,14 @@ async function runQwenAcpTurn(requestId, prompt, userText, sessionConfig, option
     stopActiveChatRequest('timeout');
   }, ACP_TIMEOUT_MS);
 
-  const turnState = {
-    requestId,
-    sessionId,
-    isNewSession: Boolean(sessionConfig.isNew),
-    streamPreview: Boolean(options.streamPreview),
-    preview: '',
-    buffer: '',
-    reasoning: '',
-  };
-  if (qwenAcpRuntime) qwenAcpRuntime.currentTurn = turnState;
-
   try {
-    const promptResponse = await qwenAcpSendRequest('session/prompt', {
+    const turnResult = await qwenAcpRuntime.runTurn(requestId, prompt, {
       sessionId,
-      prompt: [{ type: 'text', text: prompt }],
+      isNewSession: Boolean(sessionConfig.isNew),
+      streamPreview: Boolean(options.streamPreview),
     });
 
     clearTimeout(timer);
-    if (qwenAcpRuntime) qwenAcpRuntime.currentTurn = null;
     if (activeChatRequest?.id === requestId) {
       activeChatRequest.proc = null;
       activeChatRequest.abortController = null;
@@ -1000,21 +764,20 @@ async function runQwenAcpTurn(requestId, prompt, userText, sessionConfig, option
       throw cancelledError;
     }
 
-    const buffer = String(turnState.buffer || '').trim();
+    const buffer = String(turnResult?.buffer || '').trim();
     const response = parseInlineResponse(buffer, userText);
-    if (turnState.reasoning && !response.reasoning) {
-      response.reasoning = normalizeLine(turnState.reasoning, 4000);
+    if (turnResult?.reasoning && !response.reasoning) {
+      response.reasoning = normalizeLine(turnResult.reasoning, 4000);
     }
 
     return {
       buffer,
       response,
-      sessionId,
-      stopReason: promptResponse?.stopReason || 'end_turn',
+      sessionId: turnResult?.sessionId || sessionId,
+      stopReason: turnResult?.stopReason || 'end_turn',
     };
   } catch (error) {
     clearTimeout(timer);
-    if (qwenAcpRuntime) qwenAcpRuntime.currentTurn = null;
     if (activeChatRequest?.id === requestId) {
       activeChatRequest.proc = null;
       activeChatRequest.abortController = null;
@@ -6497,77 +6260,6 @@ function inferBrowserDirectiveFromUserInput(userText, sequence = []) {
     url: targetUrl,
   };
 }
-
-/* legacy browser-autopilot helper removed
-function isLikelyBrowserAutopilotTask(userText) {
-  return false;
-  const input = String(userText || '').trim();
-  if (!input) return false;
-
-  const browserDirective = inferBrowserDirectiveFromUserInput(input, []);
-  if (!browserDirective) return false;
-
-  const lower = input.toLowerCase();
-  const hasAny = (...phrases) => phrases.some((phrase) => lower.includes(phrase));
-  const mentionsKnownWebTarget = hasAny(
-    'youtube',
-    'google',
-    'gmail',
-    'maps',
-    'drive',
-    'linkedin',
-    'x.com',
-    'twitter',
-    'wikipedia',
-    'amazon',
-  );
-  const asksSearchOrFind = hasAny(
-    'cerca',
-    'cerca una',
-    'cerca un',
-    'trova',
-    'search',
-    'find',
-    'look up',
-    'cerca su',
-    'vai su',
-  );
-  const asksContinuation = hasAny(
-    'continua',
-    'continue',
-    'fino a',
-    'until',
-    'finche',
-    'finchè',
-    'poi',
-    'e cerca',
-    'e trova',
-    'e continua',
-  );
-  const asksInteractiveFlow = hasAny(
-    'clicca',
-    'click',
-    'seleziona',
-    'apri il primo',
-    'open the first',
-    'login',
-    'log in',
-    'accedi',
-    'compila',
-    'fill',
-    'iscriviti',
-    'prenota',
-    'guarda',
-    'watch',
-    'live',
-    'video',
-  );
-
-  return (asksSearchOrFind && (asksContinuation || asksInteractiveFlow || mentionsKnownWebTarget))
-    || (mentionsKnownWebTarget && asksInteractiveFlow)
-    || (hasAny('browser', 'web', 'sito', 'pagina') && asksSearchOrFind && asksContinuation);
-}
-*/
 
 function isLikelyComputerTask(userText) {
   const input = String(userText || '').trim().toLowerCase();

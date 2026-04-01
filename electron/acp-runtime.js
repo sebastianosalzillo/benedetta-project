@@ -88,6 +88,9 @@ class QwenAcpRuntime {
     this._reasoningTagNames = options.reasoningTagNames || ['think', 'thought', 'reasoning', 'analysis', 'internal', 'plan'];
     this._onStreamChunk = options.onStreamChunk;
     this._cwd = options.cwd || path.join(__dirname, '..');
+    this._requestTimeoutMs = Number.isFinite(options.requestTimeoutMs) ? options.requestTimeoutMs : 60000;
+    this._launcherCommand = String(options.launcherCommand || '').trim();
+    this._launcherArgs = Array.isArray(options.launcherArgs) ? options.launcherArgs.slice() : null;
   }
 
   get proc() { return this._proc; }
@@ -172,7 +175,7 @@ class QwenAcpRuntime {
     });
   }
 
-  sendRequest(method, params = null) {
+  sendRequest(method, params = null, timeoutMs = this._requestTimeoutMs) {
     if (!this._proc || this._proc.killed) {
       return Promise.reject(new Error('Qwen ACP non disponibile.'));
     }
@@ -189,7 +192,7 @@ class QwenAcpRuntime {
       const timeout = setTimeout(() => {
         this._pending.delete(id);
         reject(new Error(`Qwen ACP request timeout: ${method}`));
-      }, 60000);
+      }, timeoutMs);
 
       this._pending.set(id, {
         resolve: (value) => { clearTimeout(timeout); resolve(value); },
@@ -230,11 +233,13 @@ class QwenAcpRuntime {
   async _start() {
     this._stop(true);
 
-    const useNodeLauncher = fs.existsSync(QWEN_CLI_JS_PATH);
-    const command = useNodeLauncher ? 'node' : 'qwen';
-    const args = useNodeLauncher
-      ? [QWEN_CLI_JS_PATH, '--acp', '--channel', 'ACP']
-      : ['--acp', '--channel', 'ACP'];
+    const useNodeLauncher = !this._launcherCommand && fs.existsSync(QWEN_CLI_JS_PATH);
+    const command = this._launcherCommand || (useNodeLauncher ? 'node' : 'qwen');
+    const args = this._launcherArgs
+      ? this._launcherArgs.slice()
+      : (useNodeLauncher
+        ? [QWEN_CLI_JS_PATH, '--acp', '--channel', 'ACP']
+        : ['--acp', '--channel', 'ACP']);
 
     const proc = spawn(command, args, {
       cwd: this._cwd,
@@ -435,6 +440,22 @@ class QwenAcpRuntime {
    */
   getStderrTail() {
     return this._stderrTail;
+  }
+
+  clearLoadedSessionId() {
+    this._loadedSessionId = '';
+  }
+
+  setLoadedSessionId(sessionId) {
+    this._loadedSessionId = String(sessionId || '').trim();
+  }
+
+  setCurrentTurn(turn) {
+    this._currentTurn = turn || null;
+  }
+
+  clearCurrentTurn() {
+    this._currentTurn = null;
   }
 }
 
