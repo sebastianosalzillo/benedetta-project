@@ -7,7 +7,9 @@
     "dev:electron": "cross-env VITE_DEV_SERVER_URL=http://localhost:5174 electron .",
     "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
     "build": "vite build",
-    "start": "electron ."
+    "start": "electron .",
+    "test:smoke": "node test_acp.js",
+    "test": "npm run test:smoke"
   },
   "dependencies": {
     "concurrently": "^9.2.1",

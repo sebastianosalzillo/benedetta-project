@@ -11,7 +11,8 @@
 - Last verified build: `npm run build` passed on 2026-04-02.
 - Active runtime now uses only the neutral tool loop; no browser-only execution path remains.
 - Task list aggiornata da revisione del 2026-04-02.
-- Task in esecuzione: `Migliorare tool result envelopes` (agent: opencode/mimo-v2-pro-free). Ultima completata: `Rimuovere isLikelyBrowserAutopilotTask`.
+- Task in esecuzione: nessuna. Ultima completata: `Aggiungere almeno un test automatico`.
+- Coordinazione: piu agenti possono lavorare sugli stessi file; riallineare `CODEX.md` prima di ogni batch e non sovrascrivere cambi altrui.
 - Git initialized. Initial commit: `07abc1f` — 131 files, 209,433 lines.
 
 ## Git
@@ -52,6 +53,9 @@
   - Browser results now include structured page metadata, snapshot summary, top refs, and warnings.
   - Computer results now include interactive-control summaries, visible-window summaries, and warnings.
   - Workspace and canvas results now include mode/summary fields for clearer next-turn planning.
+- Added an automatic ACP smoke test.
+  - `npm run test:smoke` now launches the local Qwen ACP entrypoint, performs initialize/session/new/session/prompt, and asserts assistant output.
+  - `npm test` now maps to the same smoke test for a minimal automated verification path.
 - Git repository initialized with .gitignore and initial commit (07abc1f).
 - Existing earlier fixes retained:
   - normalized system stream messages
@@ -87,7 +91,7 @@
 ## Notes
 - `isLikelyBrowserAutopilotTask(...)` has been fully deleted from main.js.
 - `getToolAvailability(...)` and blocked-tool reporting currently remain as executor-side capability gates, not planners.
-- The next important refactor is adding at least one automatic ACP smoke test.
+- The next important refactor is the JSON tool-use transition.
 - Module migration blocker: `browser-agent.js`, `computer-control.js`, `window-manager.js` have internal state (`pinchtabProcess`, `pywinautoMcpProcess`, `avatarWindow`, ecc.) shared with main.js functions. Importing them requires dependency injection or state getter/setters — a deeper refactor.
 - ACP runtime converged: `main.js` no longer carries a second inline ACP implementation.
 - Constant aliases (`const X = C.X`) remain in main.js (48 lines). They are used throughout the file; replacing with `C.X` directly is low-priority and risky.
@@ -120,7 +124,7 @@
   - Step 1: implementare `parseJsonToolCalls()`.
   - Step 2: aggiornare `parseInlineResponse()` con fallback regex durante transizione.
   - Step 3-7: seguire il piano nel file.
-- [ ] **Aggiungere almeno un test automatico**
+- [x] **Aggiungere almeno un test automatico**
   - Integrare `test_acp.js` come `npm test` o `npm run test:smoke`.
   - Minimo: `npm run build` passa + una chiamata ACP base funzionante.
 - [ ] **Rimuovere file spazzatura dalla radice**
