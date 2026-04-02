@@ -295,9 +295,9 @@ Portare il runtime a **`model-planned agent with server execution`**:
 - **Stato:** In progress
 - **Area di lavoro attiva:** `electron/main.js`, `browser-agent.js`, `computer-control.js`, `window-manager.js`
 - **Ultima build verificata:** `npm run build` passata il 2026-04-02
-- **Task in esecuzione:** T003a/b/c — Migrazione moduli con incapsulamento
-- **Ultima task completata:** Transizione JSON tool-use + PROPOSTE.md #001 approvata
-- **Blocco corrente:** **RIMOSSO** — ADR-002 approvata, task T003a/b/c pronte per implementazione
+- **Task in esecuzione:** T003a/b/c — Migrazione moduli (agent: opencode/mimo-v2-pro-free)
+- **Ultima task completata:** computer-control.js migrato, browser-agent auth token in modulo, window-manager utilities importate
+- **Blocco corrente:** Service functions browser-agent restano in main.js (versioni enhanced). State pinchtabProcess/pinchtabStartupPromise in main.js.
 - **Decisione architetturale:** ADR-002 — Incapsulamento Completo per migrazione moduli
 - **Prossima azione:** Costruttore può iniziare migrazione da T003a (browser-agent.js)
 
