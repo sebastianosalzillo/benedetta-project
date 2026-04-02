@@ -22,9 +22,8 @@
 
 | ID | Task | Priorità | Stato | Assegnato | Stima | Note |
 |----|------|----------|-------|-----------|-------|------|
-| T003a | Migrare `browser-agent.js` con incapsulamento stato | Alta | Ready | - | 2h | **APPROVATA** — Vedi PROPOSTE.md #001. Incapsulare `pinchtabProcess`, `pinchtabStartupPromise` nel modulo. Esportare getter per stato letto da main.js |
-| T003b | Migrare `computer-control.js` con incapsulamento stato | Alta | Ready | - | 2h | **APPROVATA** — Vedi PROPOSTE.md #001. Incapsulare `pywinautoMcpProcess` nel modulo. Esportare getter per stato letto da main.js |
-| T003c | Migrare `window-manager.js` con pattern factory | Alta | Ready | - | 2h | **APPROVATA** — Vedi PROPOSTE.md #001. Usare `createWindowManager({ app, BrowserWindow })`. Mantenere getter per finestre |
+| T003a | Migrare `browser-agent.js` con incapsulamento stato | Alta | In Progress | opencode/mimo-v2-pro-free | 2h | **Parziale** — auth token getter/setter nel modulo, 21 utility pure importate. Service functions restano in main.js (enhanced versions con config setup). Commit `601ad79` |
+| T003c | Migrare `window-manager.js` con pattern factory | Alta | In Progress | opencode/mimo-v2-pro-free | 2h | **Parziale** — 4 utility pure importate (getDisplayById, isBoundsVisible, getWindowLayout, getCanvasBoundsForLayout). createXxxWindow restano inline (dipendono da globali). Commit `601ad79` |
 | T004 | Rimuovere codice duplicato da `main.js` dopo migrazione | Media | Blocked | - | 2h | Dipende da T003a, T003b, T003c completate. Rimuovere funzioni inline duplicate |
 | T005 | Aggiungere test unitari ai moduli migrati | Media | Blocked | - | 3h | Dipende da T003a, T003b, T003c. Test in isolamento con mock |
 
@@ -67,6 +66,7 @@
 | T106 | Completare transizione JSON tool-use | 2026-04-02 | 818765f | Envelope JSON con segments ordinati |
 | T107 | Git initialized + initial commit | 2026-04-02 | 07abc1f | 131 files, 209 433 lines |
 | T108 | Misurare latenza Kokoro in-app dopo warmup | 2026-04-02 | 5269361 | startup ~10.16s, warm ensure ~2ms, prima sintesi ~99ms, seconda ~93ms |
+| T109 | Migrare computer-control.js (Opzione C) | 2026-04-02 | d60234e | -109 righe duplicate rimosse da main.js, import dal modulo |
 
 ---
 
@@ -81,4 +81,4 @@
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Task totali: 15 attive + 8 completate*
+*Task totali: 14 attive + 9 completate*
