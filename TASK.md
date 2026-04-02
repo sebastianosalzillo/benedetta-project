@@ -14,7 +14,6 @@
 
 | ID | Task | Priorità | Stato | Assegnato | Stima | Note |
 |----|------|----------|-------|-----------|-------|------|
-| T001 | Misurare latenza Kokoro in-app dopo warmup | Alta | Pending | - | 1h | Confermare benchmark: init ~1.7s, prima sintesi ~1.1s, seconda ~80ms |
 | T002 | Rimuovere file spazzatura dalla radice | Alta | Pending | - | 15min | Eliminare `lisat modd e resto.txt.txt` |
 
 ---
@@ -23,9 +22,11 @@
 
 | ID | Task | Priorità | Stato | Assegnato | Stima | Note |
 |----|------|----------|-------|-----------|-------|------|
-| T003 | Completare migrazione moduli con stato condiviso | Alta | Blocked | - | 4-6h | **BLOCCATO** — richiede decisione su PROPOSTE.md #001. Moduli: browser-agent, computer-control, window-manager |
-| T004 | Rimuovere codice duplicato da main.js dopo migrazione | Media | Blocked | - | 2h | Dipende da T003 |
-| T005 | Aggiungere test unitari ai moduli migrati | Media | Blocked | - | 3h | Dipende da T003 |
+| T003a | Migrare `browser-agent.js` con incapsulamento stato | Alta | Ready | - | 2h | **APPROVATA** — Vedi PROPOSTE.md #001. Incapsulare `pinchtabProcess`, `pinchtabStartupPromise` nel modulo. Esportare getter per stato letto da main.js |
+| T003b | Migrare `computer-control.js` con incapsulamento stato | Alta | Ready | - | 2h | **APPROVATA** — Vedi PROPOSTE.md #001. Incapsulare `pywinautoMcpProcess` nel modulo. Esportare getter per stato letto da main.js |
+| T003c | Migrare `window-manager.js` con pattern factory | Alta | Ready | - | 2h | **APPROVATA** — Vedi PROPOSTE.md #001. Usare `createWindowManager({ app, BrowserWindow })`. Mantenere getter per finestre |
+| T004 | Rimuovere codice duplicato da `main.js` dopo migrazione | Media | Blocked | - | 2h | Dipende da T003a, T003b, T003c completate. Rimuovere funzioni inline duplicate |
+| T005 | Aggiungere test unitari ai moduli migrati | Media | Blocked | - | 3h | Dipende da T003a, T003b, T003c. Test in isolamento con mock |
 
 ---
 
@@ -63,8 +64,9 @@
 | T103 | Aggiungere `.gitignore` | 2026-04-02 | 07abc1f | node_modules, dist, __pycache__, .pinchtab-profile, *.log, .env |
 | T104 | Aggiungere smoke test (`npm run test:smoke`) | 2026-04-02 | 7e21009 | ACP smoke test funzionante |
 | T105 | Migliorare tool result envelopes | 2026-04-02 | 0b0ed41 | Browser, computer, workspace, canvas results |
-| T106 | Completare transizione JSON tool-use | 2026-04-02 | - | Envelope JSON con segments ordinati |
+| T106 | Completare transizione JSON tool-use | 2026-04-02 | 818765f | Envelope JSON con segments ordinati |
 | T107 | Git initialized + initial commit | 2026-04-02 | 07abc1f | 131 files, 209 433 lines |
+| T108 | Misurare latenza Kokoro in-app dopo warmup | 2026-04-02 | 5269361 | startup ~10.16s, warm ensure ~2ms, prima sintesi ~99ms, seconda ~93ms |
 
 ---
 
@@ -79,4 +81,4 @@
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Task totali: 16 attive + 7 completate*
+*Task totali: 15 attive + 8 completate*

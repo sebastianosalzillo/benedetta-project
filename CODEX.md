@@ -14,10 +14,12 @@
 
 | File | Scopo | Quando usare |
 |------|-------|--------------|
-| `CODEX.md` | Coordinamento multi-agente, stato architetturale, ruoli | Lettura obbligatoria prima di ogni sessione di lavoro |
+| `CODEX.md` | Coordinamento multi-agente, stato architetturale, ruoli | **Lettura obbligatoria** prima di ogni sessione di lavoro |
 | `PROPOSTE.md` | Proposte architetturali e refactor in revisione | Scrivere quando serve approvazione multi-agente su decisioni |
 | `TASK.md` | Task implementative tracciate e assegnate | Leggere per vedere cosa fare, aggiornare dopo ogni commit |
 | `RICERCA.md` | Ricerche su tecnologie, performance, best practice | Avviare ricerche quando serve esplorazione prima di implementare |
+| `REVIEW.md` | Code review formali per task/PR completati | Revisore compila review prima del merge |
+| `DECISIONI.md` | Decisioni architetturali (ADR) tracciate e motivate | Architect documenta decisioni importanti |
 | `ANTIGRAVITY.md` | Analisi approfondita architettura e codice | Consultare per comprensione completa del sistema |
 | `PROJECT_STATUS.md` | Stato fasi di sviluppo e roadmap | Riferimento per milestone e deliverable |
 | `ROADMAP.md` | Feature future e visione lungo termine | Pianificazione e priorizzazione |
@@ -150,27 +152,122 @@
 
 ---
 
+### Architect
+
+**Responsabilità:**
+- Definire la visione architetturale a lungo termine
+- Prendere decisioni su pattern, tecnologie core, confini di modulo
+- Risolvere disaccordi tra revisore e costruttore
+- Mantenere coerenza tra PROPOSTE.md e architettura target
+- Aggiornare CODEX.md con cambiamenti architetturali
+
+**Workflow:**
+```
+1. Riceve proposta controversa o decisione complessa
+2. Valuta impatto su architettura esistente e futura
+3. Consulta documentazione architetturale (CODEX.md, ANTIGRAVITY.md)
+4. Decide: approva, modifica, o respinge con motivazione
+5. Aggiorna documentazione architetturale se necessario
+6. Comunica decisione a tutti gli agenti
+```
+
+**Output atteso:**
+- Decisione architetturale documentata in CODEX.md o PROPOSTE.md
+- Aggiornamenti a documentazione se l'architettura cambia
+- Linee guida chiare per implementazioni future
+
+---
+
+### QA / Tester
+
+**Responsabilità:**
+- Verificare che le task completate funzionino correttamente
+- Eseguire test manuali e automatizzati
+- Segnalare bug in TASK.md con riproducibilità
+- Mantenere suite di test aggiornata
+
+**Workflow:**
+```
+1. Identifica task completate in TASK.md (stato: Completed)
+2. Esegue build: npm run build
+3. Esegue test: npm run test:smoke o test specifici
+4. Test manuali se pertinenti (flusso utente, edge case)
+5. Segnala bug in TASK.md con:
+   - Descrizione chiara
+   - Step per riprodurre
+   - Comportamento atteso vs osservato
+   - Screenshot/log se utili
+6. Approva merge se tutto verde
+```
+
+**Output atteso:**
+- Report di test in TASK.md o REVIEW.md
+- Bug segnalati con riproducibilità
+- Approvazione merge o richiesta di fix
+
+---
+
+### Documenter
+
+**Responsabilità:**
+- Mantenere documentazione sincronizzata con il codice
+- Scrivere guide, README, esempi d'uso
+- Aggiornare PROPOSTE.md, TASK.md, RICERCA.md con formattazione corretta
+- Creare diagrammi architetturali quando utili
+
+**Workflow:**
+```
+1. Monitora commit e task completate
+2. Identifica documentazione da aggiornare
+3. Scrive/aggiorna file pertinenti
+4. Verifica coerenza con codice implementato
+5. Segnala discrepanze tra docs e implementazione
+```
+
+**Output atteso:**
+- Documentazione aggiornata e coerente
+- README.md chiaro per nuovi sviluppatori
+- Diagrammi o esempi quando utili
+
+---
+
 ## Flusso di Lavoro Multi-Agente
 
 ```
-┌─────────────────┐
-│   RICERCA.md    │ ← Ricercatore esplora e documenta
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  PROPOSTE.md    │ ← Ricercatore propone, Revisore valuta
-└────────┬────────┘
-         │ approvato
-         ▼
-┌─────────────────┐
-│    TASK.md      │ ← Revisore assegna, Costruttore esegue
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   CODEX.md      │ ← Aggiornamento stato e coordinamento
-└─────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         RICERCA.md                              │
+│  Ricercatore: esplora, benchmark, raccomanda                    │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        PROPOSTE.md                              │
+│  Ricercatore: propone → Revisore: valuta → Architect: decide    │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ approvato
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                         TASK.md                                 │
+│  Revisore: assegna → Costruttore: implementa → QA: testa        │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        REVIEW.md                                │
+│  Revisore: code review → Verdict: Merge / Changes / Not Ready   │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      DECISIONI.md                               │
+│  Architect: documenta ADR per decisioni importanti              │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        CODEX.md                                 │
+│  Tutti: aggiornano stato, coordinamento, storico sessioni       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Regole di Coordinamento
@@ -196,11 +293,13 @@ Portare il runtime a **`model-planned agent with server execution`**:
 ## Current Status
 
 - **Stato:** In progress
-- **Area di lavoro attiva:** `electron/main.js`
+- **Area di lavoro attiva:** `electron/main.js`, `browser-agent.js`, `computer-control.js`, `window-manager.js`
 - **Ultima build verificata:** `npm run build` passata il 2026-04-02
-- **Task in esecuzione:** Sblocco migrazione moduli — Opzione C (agent: opencode/mimo-v2-pro-free)
-- **Ultima task completata:** computer-control.js migrato (-109 righe duplicate da main.js)
-- **Blocco corrente:** browser-agent.js — pinchtabAuthToken condiviso tra config setup (main.js) e service (module). Utility functions pure importate ma non ancora migrate.
+- **Task in esecuzione:** T003a/b/c — Migrazione moduli con incapsulamento
+- **Ultima task completata:** Transizione JSON tool-use + PROPOSTE.md #001 approvata
+- **Blocco corrente:** **RIMOSSO** — ADR-002 approvata, task T003a/b/c pronte per implementazione
+- **Decisione architetturale:** ADR-002 — Incapsulamento Completo per migrazione moduli
+- **Prossima azione:** Costruttore può iniziare migrazione da T003a (browser-agent.js)
 
 ---
 
@@ -249,9 +348,9 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | `skills.js` | ✅ Importato | Caricamento skill |
 | `apply-patch.js` | ✅ Importato | Patch diff unificato |
 | `renderer-loop.js` | ✅ Importato | IPC utilities |
-| `window-manager.js` | ❌ NON importato | Bloccato: stato condiviso |
-| `browser-agent.js` | ❌ NON importato | Bloccato: stato condiviso |
-| `computer-control.js` | ❌ NON importato | Bloccato: stato condiviso |
+| `window-manager.js` | ❌ NON importato | Bloccato: create*Window inline in main.js |
+| `browser-agent.js` | ⚠️ Parziale | Utility importate, service functions duplicate (ensure/stop/request) |
+| `computer-control.js` | ✅ Importato | Migrato, nessuna funzione duplicata residua |
 
 ---
 
@@ -278,6 +377,8 @@ Portare il runtime a **`model-planned agent with server execution`**:
 
 ## Note Recenti
 
+- Transizione JSON tool-use completata: envelope JSON canonico con `segments` ordinati (`818765f`)
+- Benchmark Kokoro in-app completato: startup ~10.16s, warm ensure ~2ms, prima sintesi ~99ms, seconda ~93ms (`5269361`)
 - `isLikelyBrowserAutopilotTask(...)` eliminato da main.js
 - `getToolAvailability(...)` rimane come capability gate
 - ACP runtime convergente: niente doppia implementazione
@@ -289,10 +390,18 @@ Portare il runtime a **`model-planned agent with server execution`**:
 
 | Data | Agente | Cambiamenti | Note |
 |------|--------|-------------|------|
-| 2026-04-02 | Agente analisi | Creati PROPOSTE.md, TASK.md, RICERCA.md | Struttura multi-agente |
-| 2026-04-02 | Agente analisi | Aggiornato CODEX.md con ruoli e workflow | Coordinamento |
+| 2026-04-02 | Agente analisi | Creati PROPOSTE.md, TASK.md, RICERCA.md | Struttura multi-agente base |
+| 2026-04-02 | Agente analisi | Aggiornato CODEX.md con ruoli e workflow | 3 ruoli: Ricercatore, Revisore, Costruttore |
+| 2026-04-02 | Agente analisi | Esteso ruoli: Ricercatore (ricerche online), Revisore (code review) | Workflow dettagliati |
+| 2026-04-02 | Agente analisi | Aggiunti ruoli: Architect, QA/Tester, Documenter | 6 ruoli totali |
+| 2026-04-02 | Agente analisi | Creati REVIEW.md, DECISIONI.md | Review formali + ADR |
+| 2026-04-02 | Agente analisi | Aggiornato flusso multi-agente con tutti i file | Diagramma completo |
+| 2026-04-02 | Codex | Completata transizione JSON tool-use | Commit `818765f`, formato canonico `segments` |
+| 2026-04-02 | Codex | Misurata latenza Kokoro in-app | Commit `5269361`, cold start ~10.16s, synth warm ~93ms |
+| 2026-04-02 | Kilo (Revisore 2) | Completata revisione PROPOSTE.md #001 | ✅ Approvato con note — confermata Opzione C, sequenza browser-agent→window-manager→cleanup |
 
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Prossima azione: Attendere revisione PROPOSTE.md #001 da parte di 2 agenti*
+*Prossima azione: Assegnare PROPOSTE.md #001 al Costruttore — 2/2 revisioni complete*
+*Ruoli disponibili: Ricercatore, Revisore, Costruttore, Architect, QA/Tester, Documenter*
