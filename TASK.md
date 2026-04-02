@@ -22,9 +22,11 @@
 
 | ID | Task | Priorità | Stato | Assegnato | Stima | Note |
 |----|------|----------|-------|-----------|-------|------|
-| T003a | Migrare `browser-agent.js` con incapsulamento stato | Alta | In Progress | opencode/mimo-v2-pro-free | 2h | **Parziale** — auth token getter/setter nel modulo, 21 utility pure importate. Service functions restano in main.js (enhanced versions con config setup). Commit `601ad79` |
-| T003c | Migrare `window-manager.js` con pattern factory | Alta | In Progress | opencode/mimo-v2-pro-free | 2h | **Parziale** — 4 utility pure importate (getDisplayById, isBoundsVisible, getWindowLayout, getCanvasBoundsForLayout). createXxxWindow restano inline (dipendono da globali). Commit `601ad79` |
+| T003a | Migrare `browser-agent.js` con incapsulamento stato | Alta | **Blocked** | opencode/mimo-v2-pro-free | 4h+ | **Bloccato** — service functions accoppiate a 14+ helper main.js-specifici (config, auth, profile, process management, Windows utils). Richiede spostamento intero gruppo helper nel modulo. Auth token getter/setter aggiunto, 21 utility pure importate. Commit `601ad79` |
+| T003c | Migrare `window-manager.js` con pattern factory | Alta | **Blocked** | opencode/mimo-v2-pro-free | 4h+ | **Bloccato** — createXxxWindow accoppiate a globali main.js (avatarWindow, chatWindow, canvasWindow, syncCanvasToAvatar, broadcastStatus). Richiede refactor stato globale. 4 utility pure importate. Commit `601ad79` |
 | T004 | Rimuovere codice duplicato da `main.js` dopo migrazione | Media | Blocked | - | 2h | Dipende da T003a, T003b, T003c completate. Rimuovere funzioni inline duplicate |
+| T004b | Spostare helper browser-agent (14 funzioni) in browser-agent.js | Alta | Ready | - | 4h | Spostare: getPinchtabProfilePath, ensurePinchtabConfig, syncPinchtabAuthTokenFromConfig, cleanupPinchtabProfile, killPinchtabListenerProcess, listPinchtabChromePids, pauseWindowsCleanup, getListeningProcessIdForPort, getProcessDetails, killPinchtabChromeProcesses, focusPinchtabChromeWindow, clearPinchtabSessionRestoreFiles, clearPinchtabSingletonFiles, createPinchtabHeaders |
+| T004c | Refactor stato globale finestre per window-manager.js | Alta | Ready | - | 4h | Spostare avatarWindow/chatWindow/canvasWindow in window-manager.js. Esportare getter. Aggiornare riferimenti in main.js (~50 punti) |
 | T005 | Aggiungere test unitari ai moduli migrati | Media | Blocked | - | 3h | Dipende da T003a, T003b, T003c. Test in isolamento con mock |
 
 ---
