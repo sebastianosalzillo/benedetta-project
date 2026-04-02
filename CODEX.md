@@ -11,7 +11,7 @@
 - Last verified build: `npm run build` passed on 2026-04-02.
 - Active runtime now uses only the neutral tool loop; no browser-only execution path remains.
 - Task list aggiornata da revisione del 2026-04-02.
-- Task in esecuzione: nessuna. Ultima completata: `Migliorare tool result envelopes`.
+- Task in esecuzione: `Migliorare tool result envelopes` (agent: opencode/mimo-v2-pro-free). Ultima completata: `Rimuovere isLikelyBrowserAutopilotTask`.
 - Git initialized. Initial commit: `07abc1f` — 131 files, 209,433 lines.
 
 ## Git
