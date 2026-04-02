@@ -40,6 +40,7 @@
 | T008 | Popolare `skills/` con almeno una skill reale | Bassa | Pending | - | 2h | Skill di esempio funzionante |
 | T009 | Documentare API preload con JSDoc completo | Bassa | Pending | - | 3h | Tutti i canali `electronAPI` |
 | T010 | Aggiungere JSDoc agli 8 moduli estratti | Bassa | Pending | - | 4h | Rendere il refactor sicuro senza TypeScript |
+| T017 | Audit Lighthouse accessibilità | Bassa | Pending | UI Specialist | 1h | Target ≥ 90 su tutte e 3 le finestre |
 
 ---
 
@@ -69,6 +70,10 @@
 | T107 | Git initialized + initial commit | 2026-04-02 | 07abc1f | 131 files, 209 433 lines |
 | T108 | Misurare latenza Kokoro in-app dopo warmup | 2026-04-02 | 5269361 | startup ~10.16s, warm ensure ~2ms, prima sintesi ~99ms, seconda ~93ms |
 | T109 | Migrare computer-control.js (Opzione C) | 2026-04-02 | d60234e | -109 righe duplicate rimosse da main.js, import dal modulo |
+| T110 | Design System v2.0 — index.css completo | 2026-04-02 | UI Specialist | Token CSS, Inter font, micro-animazioni hover/active, scrollbar thin, focus visible |
+| T111 | AvatarChat.jsx — Enter to send, typing indicator | 2026-04-02 | UI Specialist | Enter invia, Shift+Enter newline, typing dots animati, shimmer su streaming |
+| T112 | App.jsx — slide animation settings/chat, HUD header | 2026-04-02 | UI Specialist | Gradient text H1, TTS latency pill, slide-in-right/left su panel switch |
+| T113 | design-system.md — documento design system | 2026-04-02 | UI Specialist | Palette, tipografia, spacing, componenti, checklist |
 
 ---
 
@@ -82,5 +87,5 @@
 
 ---
 
-*Ultimo aggiornamento: 2026-04-02*
-*Task totali: 14 attive + 9 completate*
+*Ultimo aggiornamento: 2026-04-02 (Costruttore batch — T003b completato, T003a/c bloccati, T004b/c aggiunti)*
+*Task totali: 15 attive + 13 completate*
