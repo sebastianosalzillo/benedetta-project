@@ -9,7 +9,8 @@
     "build": "vite build",
     "start": "electron .",
     "test:smoke": "node test_acp.js",
-    "test": "npm run test:smoke"
+    "test": "npm run test:smoke",
+    "bench:kokoro": "node scripts/measure_kokoro_latency.js"
   },
   "dependencies": {
     "concurrently": "^9.2.1",

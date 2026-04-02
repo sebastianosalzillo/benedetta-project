@@ -60,6 +60,9 @@
   - Canonical tool/action turns now use a single JSON envelope with ordered `segments`.
   - `parseInlineResponse(...)` now accepts JSON envelopes even when they contain speech-only segments or mixed speech/tool segments.
   - Legacy token/regex parsing remains only as backward-compatibility fallback.
+- Measured Kokoro latency in-app with a repeatable benchmark.
+  - `npm run bench:kokoro` now reports cold startup, warm ensure, and two synthesis timings.
+  - Latest measurement: startup ~10.16s, warm `ensure()` ~2ms, first synth ~99ms, second synth ~93ms.
 - Git repository initialized with .gitignore and initial commit (07abc1f).
 - Existing earlier fixes retained:
   - normalized system stream messages
@@ -95,7 +98,7 @@
 ## Notes
 - `isLikelyBrowserAutopilotTask(...)` has been fully deleted from main.js.
 - `getToolAvailability(...)` and blocked-tool reporting currently remain as executor-side capability gates, not planners.
-- The next important refactor is measuring Kokoro latency in-app or continuing module migration where not blocked.
+- The next important refactor is continuing module migration where not blocked or removing root-level garbage files.
 - Module migration blocker: `browser-agent.js`, `computer-control.js`, `window-manager.js` have internal state (`pinchtabProcess`, `pywinautoMcpProcess`, `avatarWindow`, ecc.) shared with main.js functions. Importing them requires dependency injection or state getter/setters — a deeper refactor.
 - ACP runtime converged: `main.js` no longer carries a second inline ACP implementation.
 - Constant aliases (`const X = C.X`) remain in main.js (48 lines). They are used throughout the file; replacing with `C.X` directly is low-priority and risky.
@@ -382,9 +385,9 @@ Motivazione:
 - [x] **Eliminare la doppia implementazione ACP runtime**
   - Verificato: `createQwenAcpRuntime()` e' una factory che usa `new QwenAcpRuntime(...)`. Nessuna duplicazione reale.
   - Wrapper locali in main.js sono sottili e corretti.
-- [ ] **Misurare latenza Kokoro in-app** dopo warmup
-  - Obiettivo: confermare benchmark (init ~1.7s, prima sintesi ~1.1s, seconda ~80ms).
-  - Tuning testo di avvio se necessario.
+- [x] **Misurare latenza Kokoro in-app** dopo warmup
+  - Benchmark aggiunto: `npm run bench:kokoro`.
+  - Misura reale: startup ~10.16s, warm `ensure()` ~2ms, prima sintesi ~99ms, seconda sintesi ~93ms.
 
 ### 🟡 BREVE TERMINE — Importanti
 
