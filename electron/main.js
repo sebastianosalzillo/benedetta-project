@@ -7972,6 +7972,16 @@ async function executeToolCalls(toolCalls) {
 }
 
 function buildToolResultPrompt(toolResults, originalUserText) {
+  const formatWarnings = (warnings) => {
+    const items = Array.isArray(warnings)
+      ? warnings.map((item) => normalizeLine(item, 220)).filter(Boolean)
+      : [];
+    return items.length ? `Warnings:\n${items.map((item) => `- ${item}`).join('\n')}` : '';
+  };
+  const formatSummaryList = (label, items) => {
+    const list = Array.isArray(items) ? items.filter(Boolean) : [];
+    return list.length ? `${label}:\n${list.map((item) => `- ${item}`).join('\n')}` : '';
+  };
   const sections = toolResults.map((r) => {
     if (r.type === 'shell') {
       return `$ ${r.command}\n${r.ok ? r.output : `Error: ${r.output}`}`;
@@ -8010,11 +8020,17 @@ function buildToolResultPrompt(toolResults, originalUserText) {
       const browserLines = [
         `Browser: ${r.ok ? 'OK' : `Errore: ${r.error}`}`,
         r.action ? `Action: ${r.action}` : '',
+        r.page?.url ? `Page.URL: ${r.page.url}` : '',
+        r.page?.title ? `Page.Title: ${r.page.title}` : '',
+        r.page?.status ? `Page.Status: ${r.page.status}` : '',
         r.currentUrl ? `URL: ${r.currentUrl}` : '',
         r.pageTitle ? `Title: ${r.pageTitle}` : '',
         r.pageStatus ? `Status: ${r.pageStatus}` : '',
         Number.isFinite(r.totalRefs) ? `Refs: ${r.totalRefs}` : '',
         r.textPreview ? `Preview: ${r.textPreview}` : '',
+        r.snapshotSummary ? `Snapshot: ${r.snapshotSummary}` : '',
+        formatSummaryList('Top refs', r.snapshotRefs),
+        formatWarnings(r.warnings),
         r.warning ? `Warning: ${r.warning}` : '',
       ].filter(Boolean);
       return browserLines.join('\n');
@@ -8025,6 +8041,10 @@ function buildToolResultPrompt(toolResults, originalUserText) {
         r.action ? `Action: ${r.action}` : '',
         r.windowTitle ? `Window: ${r.windowTitle}` : '',
         r.note ? `Note: ${r.note}` : '',
+        r.interactiveSummary ? `Interactive: ${r.interactiveSummary}` : '',
+        formatSummaryList('Top controls', r.topControls),
+        formatSummaryList('Visible windows', r.windowSummary),
+        formatWarnings(r.warnings),
       ].filter(Boolean);
       return computerLines.join('\n');
     }
@@ -8034,6 +8054,9 @@ function buildToolResultPrompt(toolResults, originalUserText) {
         r.file ? `File: ${r.file}` : '',
         r.path ? `Path: ${r.path}` : '',
         r.skipped ? 'Skipped: true' : '',
+        r.mode ? `Mode: ${r.mode}` : '',
+        r.summary ? `Summary: ${r.summary}` : '',
+        formatWarnings(r.warnings),
       ].filter(Boolean);
       return workspaceLines.join('\n');
     }
@@ -8042,6 +8065,8 @@ function buildToolResultPrompt(toolResults, originalUserText) {
         `Canvas: ${r.ok ? 'OK' : `Errore: ${r.error}`}`,
         r.contentType ? `Type: ${r.contentType}` : '',
         r.title ? `Title: ${r.title}` : '',
+        r.summary ? `Summary: ${r.summary}` : '',
+        formatWarnings(r.warnings),
       ].filter(Boolean);
       return canvasLines.join('\n');
     }
@@ -8055,6 +8080,34 @@ function buildToolResultPrompt(toolResults, originalUserText) {
     `Ora hai i risultati dei tool. Se hai abbastanza informazioni, rispondi direttamente alla domanda dell'utente: "${originalUserText}"`,
     `Se hai bisogno di altri tool, usali. Altrimenti rispondi in modo completo.`,
   ].join('\n\n');
+}
+
+function buildBrowserSnapshotSummary(snapshotItems = []) {
+  const items = Array.isArray(snapshotItems) ? snapshotItems.filter(Boolean) : [];
+  const refs = items
+    .slice(0, 8)
+    .map((item) => `${item.ref || 'node'} | ${item.role || 'node'} | ${normalizeLine(item.label || '', 100)}`);
+  return {
+    summary: items.length ? `${items.length} interactive refs disponibili` : 'nessun ref interattivo disponibile',
+    refs,
+  };
+}
+
+function buildComputerInteractiveSummary(elements = []) {
+  const items = Array.isArray(elements) ? elements.filter(Boolean) : [];
+  const topControls = items
+    .slice(0, 8)
+    .map((item) => `${item.controlId ?? 'control'} | ${item.elementType || 'element'} | ${normalizeLine(item.label || '', 100)}`);
+  return {
+    summary: items.length ? `${items.length} controlli interattivi rilevati` : 'nessun controllo interattivo rilevato',
+    topControls,
+  };
+}
+
+function buildWindowSummary(windows = []) {
+  return (Array.isArray(windows) ? windows : [])
+    .slice(0, 6)
+    .map((item) => `${normalizeLine(item.title || 'window', 80)}${item.process ? ` (${normalizeLine(item.process, 40)})` : ''}`);
 }
 
 async function agentLoop(requestId, userText, prompt, sessionInfo, options = {}) {
@@ -8115,9 +8168,11 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
             action: actionCall.directive?.action || '',
             error: browserResult.error,
             warning: browserResult?.warning || '',
+            warnings: [browserResult?.warning || browserResult?.error || ''].filter(Boolean),
           });
         } else {
           const browserContent = browserResult?.state?.content || canvasState.content || {};
+          const snapshotSummary = buildBrowserSnapshotSummary(browserContent.snapshotItems);
           actionExecutionResults.push({
             type: 'browser',
             ok: true,
@@ -8125,9 +8180,17 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
             currentUrl: String(browserContent.currentUrl || browserContent.url || '').trim(),
             pageTitle: String(browserContent.pageTitle || browserContent.title || '').trim(),
             pageStatus: String(browserContent.status || '').trim(),
+            page: {
+              url: String(browserContent.currentUrl || browserContent.url || '').trim(),
+              title: String(browserContent.pageTitle || browserContent.title || '').trim(),
+              status: String(browserContent.status || '').trim(),
+            },
             totalRefs: Array.isArray(browserContent.snapshotItems) ? browserContent.snapshotItems.length : null,
             textPreview: normalizeLine(browserContent.text || '', 400),
+            snapshotSummary: snapshotSummary.summary,
+            snapshotRefs: snapshotSummary.refs,
             warning: browserResult?.warning || '',
+            warnings: [browserResult?.warning || '', String(browserContent.message || '').trim()].filter(Boolean),
           });
         }
       } else if (actionCall.type === 'computer') {
@@ -8140,20 +8203,32 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
             action: actionCall.directive?.action || '',
             error: computerResult.error,
             note: computerResult?.warning || '',
+            warnings: [computerResult?.warning || computerResult?.error || ''].filter(Boolean),
           });
         } else {
+          const interactiveSummary = buildComputerInteractiveSummary(computerState.interactiveElements);
           actionExecutionResults.push({
             type: 'computer',
             ok: true,
             action: actionCall.directive?.action || '',
             windowTitle: String(computerResult?.windowTitle || computerResult?.title || '').trim(),
             note: String(computerResult?.message || computerResult?.warning || '').trim(),
+            interactiveSummary: interactiveSummary.summary,
+            topControls: interactiveSummary.topControls,
+            windowSummary: buildWindowSummary(computerState.windows),
+            warnings: [computerResult?.warning || ''].filter(Boolean),
           });
         }
       } else if (actionCall.type === 'workspace') {
         const workspaceResult = applyWorkspaceUpdate(actionCall.directive);
         if (workspaceResult?.ok === false) {
-          actionExecutionResults.push({ type: 'workspace', ok: false, error: workspaceResult.error });
+          actionExecutionResults.push({
+            type: 'workspace',
+            ok: false,
+            error: workspaceResult.error,
+            mode: String(actionCall.directive?.mode || 'append').trim(),
+            warnings: [workspaceResult.error || ''].filter(Boolean),
+          });
         } else {
           actionExecutionResults.push({
             type: 'workspace',
@@ -8161,6 +8236,11 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
             file: workspaceResult.file || '',
             path: workspaceResult.path || '',
             skipped: Boolean(workspaceResult.skipped),
+            mode: String(actionCall.directive?.mode || 'append').trim(),
+            summary: workspaceResult.skipped
+              ? 'contenuto gia presente, nessuna modifica applicata'
+              : 'workspace aggiornato con successo',
+            warnings: [],
           });
         }
       } else if (actionCall.type === 'canvas') {
@@ -8171,6 +8251,10 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
           ok: true,
           contentType: String(canvasState.content?.type || '').trim(),
           title: String(canvasState.content?.title || '').trim(),
+          summary: canvasState.content?.type === 'browser'
+            ? `browser canvas attivo su ${String(canvasState.content?.pageTitle || canvasState.content?.title || 'Browser').trim()}`
+            : `canvas aggiornato con contenuto ${String(canvasState.content?.type || 'unknown').trim()}`,
+          warnings: [],
         });
       }
     }

@@ -11,6 +11,7 @@
 - Last verified build: `npm run build` passed on 2026-04-02.
 - Active runtime now uses only the neutral tool loop; no browser-only execution path remains.
 - Task list aggiornata da revisione del 2026-04-02.
+- Task in esecuzione: nessuna. Ultima completata: `Migliorare tool result envelopes`.
 - Git initialized. Initial commit: `07abc1f` — 131 files, 209,433 lines.
 
 ## Git
@@ -47,6 +48,10 @@
   - `main.js` now delegates ACP process/session/prompt work to `QwenAcpRuntime`.
   - The remaining helpers in `main.js` are thin wrappers around the shared runtime class.
 - Verified `createQwenAcpRuntime()` is a factory using `new QwenAcpRuntime(...)` — no double implementation.
+- Improved tool result envelopes for action tools.
+  - Browser results now include structured page metadata, snapshot summary, top refs, and warnings.
+  - Computer results now include interactive-control summaries, visible-window summaries, and warnings.
+  - Workspace and canvas results now include mode/summary fields for clearer next-turn planning.
 - Git repository initialized with .gitignore and initial commit (07abc1f).
 - Existing earlier fixes retained:
   - normalized system stream messages
@@ -61,9 +66,6 @@
 - Unify execution around one neutral tool loop.
   - keep `agentLoop(...)` as the single planner/executor bridge
   - move any useful browser-state refresh behavior into standard tool execution, not a separate planning path
-- Improve tool result envelopes.
-  - browser results should include page/url/title/snapshot summary/warnings
-  - action-tool results should be rich enough for the brain to decide the next step
 - Reduce prompt-side server steering.
   - keep tool usage contract
   - remove duplicated or mode-specific planning behavior that implies separate agents
@@ -85,7 +87,7 @@
 ## Notes
 - `isLikelyBrowserAutopilotTask(...)` has been fully deleted from main.js.
 - `getToolAvailability(...)` and blocked-tool reporting currently remain as executor-side capability gates, not planners.
-- The next important refactor is further normalization of tool-result envelopes.
+- The next important refactor is adding at least one automatic ACP smoke test.
 - Module migration blocker: `browser-agent.js`, `computer-control.js`, `window-manager.js` have internal state (`pinchtabProcess`, `pywinautoMcpProcess`, `avatarWindow`, ecc.) shared with main.js functions. Importing them requires dependency injection or state getter/setters — a deeper refactor.
 - ACP runtime converged: `main.js` no longer carries a second inline ACP implementation.
 - Constant aliases (`const X = C.X`) remain in main.js (48 lines). They are used throughout the file; replacing with `C.X` directly is low-priority and risky.
@@ -129,7 +131,7 @@
   - `browser-agent.js`, `computer-control.js`, `window-manager.js` hanno stato interno condiviso con main.js.
   - Richiede refactor con dependency injection o state getter/setters.
   - Moduli gia importati e funzionanti: constants, state-manager, acp-runtime, tts-service, workspace-manager, shell-tool, file-tool, search-tool, git-tool, web-tool, task-tool.
-- [ ] **Migliorare tool result envelopes**
+- [x] **Migliorare tool result envelopes**
   - Browser results: aggiungere `page`, `url`, `title`, `snapshotSummary`, `warnings`.
   - Action-tool results: struttura ricca abbastanza da permettere al brain decisioni autonome nel loop.
 
