@@ -6411,6 +6411,108 @@ function extractSpeechPreview(raw) {
 
 function parseJsonToolCalls(text) {
   const raw = String(text || '');
+  const extractSegmentsFromJsonEnvelope = (json) => {
+    const nextSegments = [];
+    const pushSpeech = (value) => {
+      const textValue = normalizeSpeechText(value);
+      if (textValue) nextSegments.push({ type: 'speech', text: textValue });
+    };
+    const pushTool = (toolName, argsValue) => {
+      if (!toolName || argsValue === undefined) return;
+      nextSegments.push({
+        type: 'tool',
+        tool: {
+          tool: String(toolName || '').trim(),
+          args: argsValue && typeof argsValue === 'object' ? argsValue : {},
+        },
+      });
+    };
+
+    if (json && typeof json === 'object' && Array.isArray(json.segments)) {
+      for (const segment of json.segments) {
+        if (!segment || typeof segment !== 'object') continue;
+        if (segment.type === 'speech') {
+          pushSpeech(segment.text);
+          continue;
+        }
+        if (segment.type === 'tool' || segment.type === 'action') {
+          pushTool(segment.tool, segment.args);
+          continue;
+        }
+      }
+      return nextSegments;
+    }
+
+    if (json && typeof json === 'object') {
+      const preSpeech = json.preActionSpeech ?? json.pre_action_speech;
+      const postSpeech = json.postActionSpeech ?? json.post_action_speech;
+      const speech = json.speech ?? json.text ?? json.message;
+      if (preSpeech !== undefined) pushSpeech(preSpeech);
+      if (json.tool && json.args !== undefined) {
+        pushTool(json.tool, json.args);
+      } else if (Array.isArray(json.tools)) {
+        for (const toolItem of json.tools) {
+          if (!toolItem || typeof toolItem !== 'object') continue;
+          pushTool(toolItem.tool, toolItem.args);
+        }
+      }
+      if (postSpeech !== undefined) {
+        pushSpeech(postSpeech);
+      } else if (speech !== undefined) {
+        pushSpeech(speech);
+      }
+    }
+
+    return nextSegments;
+  };
+
+  const summarizeSegments = (segments) => {
+    const tools = [];
+    const speechParts = [];
+    for (const segment of segments) {
+      if (segment?.type === 'speech' && segment.text) {
+        speechParts.push(segment.text);
+      } else if (segment?.type === 'tool' && segment.tool) {
+        tools.push(segment.tool);
+      }
+    }
+    const speech = speechParts.join(' ').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+    const firstToolIndex = segments.findIndex((segment) => segment.type === 'tool');
+    const preActionSpeech = segments
+      .slice(0, firstToolIndex >= 0 ? firstToolIndex : segments.length)
+      .filter((segment) => segment.type === 'speech')
+      .map((segment) => segment.text)
+      .join(' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+    const postActionSpeech = (firstToolIndex >= 0 ? segments.slice(firstToolIndex + 1) : [])
+      .filter((segment) => segment.type === 'speech')
+      .map((segment) => segment.text)
+      .join(' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+    return {
+      matchedJson: segments.length > 0,
+      tools,
+      speech,
+      segments,
+      preActionSpeech,
+      postActionSpeech,
+    };
+  };
+
+  const rootJsonResult = raw.startsWith('{') || raw.startsWith('[')
+    ? tryParseJsonAt(raw, 0)
+    : null;
+  if (rootJsonResult && rootJsonResult.endIndex === raw.length) {
+    const rootSegments = extractSegmentsFromJsonEnvelope(rootJsonResult.json);
+    if (rootSegments.length > 0) {
+      return summarizeSegments(rootSegments);
+    }
+  }
+
   const tools = [];
   const speechParts = [];
   const segments = [];
@@ -6454,25 +6556,30 @@ function parseJsonToolCalls(text) {
     segments.push({ type: 'speech', text: afterText });
   }
 
-  const speech = speechParts.join(' ').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
-  const firstToolIndex = segments.findIndex((segment) => segment.type === 'tool');
-  const preActionSpeech = segments
-    .slice(0, firstToolIndex >= 0 ? firstToolIndex : segments.length)
-    .filter((segment) => segment.type === 'speech')
-    .map((segment) => segment.text)
-    .join(' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-  const postActionSpeech = (firstToolIndex >= 0 ? segments.slice(firstToolIndex + 1) : [])
-    .filter((segment) => segment.type === 'speech')
-    .map((segment) => segment.text)
-    .join(' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-
-  return { tools, speech, segments, preActionSpeech, postActionSpeech };
+  return {
+    matchedJson: tools.length > 0,
+    tools,
+    speech: speechParts.join(' ').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim(),
+    segments,
+    preActionSpeech: segments
+      .slice(0, segments.findIndex((segment) => segment.type === 'tool') >= 0 ? segments.findIndex((segment) => segment.type === 'tool') : segments.length)
+      .filter((segment) => segment.type === 'speech')
+      .map((segment) => segment.text)
+      .join(' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim(),
+    postActionSpeech: (() => {
+      const firstToolIndex = segments.findIndex((segment) => segment.type === 'tool');
+      return (firstToolIndex >= 0 ? segments.slice(firstToolIndex + 1) : [])
+        .filter((segment) => segment.type === 'speech')
+        .map((segment) => segment.text)
+        .join(' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+    })(),
+  };
 }
 
 function tryParseJsonAt(text, startPos) {
@@ -6524,6 +6631,12 @@ function extractToolsFromJson(json) {
 
   if (json.tool && json.args !== undefined) {
     tools.push({ tool: json.tool, args: json.args });
+  } else if (Array.isArray(json.segments)) {
+    for (const segment of json.segments) {
+      if (segment && typeof segment === 'object' && (segment.type === 'tool' || segment.type === 'action') && segment.tool && segment.args !== undefined) {
+        tools.push({ tool: segment.tool, args: segment.args });
+      }
+    }
   } else if (json.tools && Array.isArray(json.tools)) {
     for (const t of json.tools) {
       if (t.tool && t.args !== undefined) {
@@ -6589,6 +6702,7 @@ function parseInlineResponse(rawOutput, fallbackInput) {
 
   // Step 1: Try JSON parsing first
   const {
+    matchedJson,
     tools: jsonTools,
     speech: jsonSpeech,
     segments: jsonSegments,
@@ -6596,7 +6710,7 @@ function parseInlineResponse(rawOutput, fallbackInput) {
     postActionSpeech: jsonPostActionSpeech,
   } = parseJsonToolCalls(raw);
 
-  if (jsonTools.length > 0) {
+  if (matchedJson) {
     // JSON-first path
     const sequence = [];
     let firstActState = null;
@@ -7248,15 +7362,15 @@ function buildDirectAcpPrompt(userText) {
     '',
     'ESEMPIO DI FLUSSO CORRETTO:',
     'User: "cosa c e nel file main.js?"',
-    'Turn 1: {"tool": "read_file", "args": {"path": "./main.js"}}',
+    'Turn 1: {"segments":[{"type":"tool","tool":"read_file","args":{"path":"./main.js"}}]}',
     '→ Il sistema legge il file e ti rimanda il contenuto',
     'Turn 2: "Il file main.js contiene 8000 righe con..." (rispondi basandoti sul contenuto reale)',
     '',
     'ESEMPIO DI FLUSSO COMPLESSO:',
     'User: "trova tutti i file che usano React e dimmi quali hook"',
-    'Turn 1: {"tool": "grep", "args": {"pattern": "import.*React", "path": "./src", "include": "*.js"}}',
+    'Turn 1: {"segments":[{"type":"tool","tool":"grep","args":{"pattern":"import.*React","path":"./src","include":"*.js"}}]}',
     '→ Risultati: 5 file trovati',
-    'Turn 2: {"tools": [{"tool": "read_file", "args": {"path": "./src/App.js"}}, {"tool": "read_file", "args": {"path": "./src/index.js"}}]}',
+    'Turn 2: {"segments":[{"type":"tool","tool":"read_file","args":{"path":"./src/App.js"}},{"type":"tool","tool":"read_file","args":{"path":"./src/index.js"}}]}',
     '→ Contenuto dei file',
     'Turn 3: "Ho trovato 5 file che usano React. Gli hook usati sono: useState, useEffect..."',
     '',
@@ -7278,8 +7392,11 @@ function buildDirectAcpPrompt(userText) {
     'Se invece la task richiede azione, usa il tool appropriato direttamente.',
     '',
     '# TOOL DISPONIBILI - FORMATO JSON',
-    'Usa {"tool": "nome", "args": {...}} per chiamare tool. Testo fuori JSON = chat+TTS.',
-    '{"tools": [...]} per tool multipli paralleli.',
+    'FORMATO CANONICO per turni con tool o azioni: UN SOLO oggetto JSON con segments ordinati.',
+    'Usa: {"segments":[{"type":"speech","text":"..."},{"type":"tool","tool":"nome","args":{...}}]}',
+    'Se non usi tool puoi rispondere in plain text. Se usi tool, NON mischiare testo fuori dal JSON.',
+    'Compatibilita legacy esiste ancora, ma tu devi usare il formato JSON canonico con segments.',
+    'Per tool multipli nello stesso turno, aggiungi piu segment di tipo tool nello stesso array.',
     '',
     '## DATA TOOLS (producono contenuto per il prossimo turno)',
     '{"tool": "read_file", "args": {"path": "percorso", "startLine": 1, "endLine": 50}}',
@@ -7377,31 +7494,31 @@ function buildDirectAcpPrompt(userText) {
     '# ESEMPI',
     '',
     'USER: ciao come stai',
-    'ASSISTANT: {"tool": "act", "args": {"emotion": "happy", "gesture": "handup", "intensity": 0.8}} Ciao! Tutto bene, grazie! Tu come stai? 😊👋',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"handup","intensity":0.8}},{"type":"speech","text":"Ciao! Tutto bene, grazie! Tu come stai? 😊👋"}]}',
     '',
     'USER: che ore sono',
-    'ASSISTANT: {"tool": "act", "args": {"emotion": "think"}} Non ho accesso diretto all orologio di sistema. 🤔 Posso pero aprire un sito con l ora se vuoi.',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"think"}},{"type":"speech","text":"Non ho accesso diretto all orologio di sistema. 🤔 Posso pero aprire un sito con l ora se vuoi."}]}',
     '',
     'USER: leggi il file IDENTITY.md',
-    'ASSISTANT: {"tool": "read_file", "args": {"path": "IDENTITY.md"}} Leggo il file per te.',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"read_file","args":{"path":"IDENTITY.md"}},{"type":"speech","text":"Leggo il file per te."}]}',
     '',
     'USER: cerca le ultime notizie su AI',
-    'ASSISTANT: {"tool": "act", "args": {"emotion": "happy", "gesture": "ok"}} Certo, cerco subito! 👌 {"tool": "web_search", "args": {"query": "ultime notizie intelligenza artificiale 2026", "numResults": 5}} Cerco le ultime notizie sull AI.',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"ok"}},{"type":"speech","text":"Certo, cerco subito! 👌"},{"type":"tool","tool":"web_search","args":{"query":"ultime notizie intelligenza artificiale 2026","numResults":5}},{"type":"speech","text":"Cerco le ultime notizie sull AI."}]}',
     '',
     'USER: apri Blocco note e scrivi ciao',
-    'ASSISTANT: {"tool": "act", "args": {"emotion": "happy", "gesture": "thumbup"}} Apro Blocco note! 👍 {"tool": "computer", "args": {"action": "open_app", "app": "notepad.exe"}} {"tool": "delay", "args": {"seconds": 1}} {"tool": "computer", "args": {"action": "type_text", "text": "ciao"}} Fatto, ho scritto ciao. 😄',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"thumbup"}},{"type":"speech","text":"Apro Blocco note! 👍"},{"type":"tool","tool":"computer","args":{"action":"open_app","app":"notepad.exe"}},{"type":"tool","tool":"delay","args":{"seconds":1}},{"type":"tool","tool":"computer","args":{"action":"type_text","text":"ciao"}},{"type":"speech","text":"Fatto, ho scritto ciao. 😄"}]}',
     '',
     'USER: sono triste oggi',
-    'ASSISTANT: {"tool": "act", "args": {"emotion": "sad", "intensity": 0.7}} Mi dispiace tanto sentire che sei triste. 😔 {"tool": "delay", "args": {"seconds": 0.5}} {"tool": "act", "args": {"emotion": "love", "intensity": 0.6}} Vuoi parlarne? Sono qui per te. 🥺',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"sad","intensity":0.7}},{"type":"speech","text":"Mi dispiace tanto sentire che sei triste. 😔"},{"type":"tool","tool":"delay","args":{"seconds":0.5}},{"type":"tool","tool":"act","args":{"emotion":"love","intensity":0.6}},{"type":"speech","text":"Vuoi parlarne? Sono qui per te. 🥺"}]}',
     '',
     'USER: grazie per laiuto',
-    'ASSISTANT: {"tool": "act", "args": {"emotion": "love", "gesture": "namaste", "intensity": 0.8}} Di nulla! E un piacere aiutarti. 🙏😊 {"tool": "delay", "args": {"seconds": 0.3}} {"tool": "act", "args": {"emotion": "happy", "gesture": "thumbup"}} Se hai bisogno, sono qui! 👍',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"love","gesture":"namaste","intensity":0.8}},{"type":"speech","text":"Di nulla! E un piacere aiutarti. 🙏😊"},{"type":"tool","tool":"delay","args":{"seconds":0.3}},{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"thumbup"}},{"type":"speech","text":"Se hai bisogno, sono qui! 👍"}]}',
     '',
     'USER: leggi le memorie',
-    'ASSISTANT: {"tool": "memory_search", "args": {"query": "preferenze utente", "scope": "all"}} Cerco nelle memorie...',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"memory_search","args":{"query":"preferenze utente","scope":"all"}},{"type":"speech","text":"Cerco nelle memorie..."}]}',
     '',
     'USER: cosa ti ho detto ieri?',
-    'ASSISTANT: {"tool": "memory_search", "args": {"query": "ieri", "scope": "daily"}} Cerco nelle daily notes...',
+    'ASSISTANT: {"segments":[{"type":"tool","tool":"memory_search","args":{"query":"ieri","scope":"daily"}},{"type":"speech","text":"Cerco nelle daily notes..."}]}',
     '',
     workspaceBlock,
     startupBootBlock,
@@ -8028,6 +8145,7 @@ function buildToolResultPrompt(toolResults, originalUserText) {
         r.pageStatus ? `Status: ${r.pageStatus}` : '',
         Number.isFinite(r.totalRefs) ? `Refs: ${r.totalRefs}` : '',
         r.textPreview ? `Preview: ${r.textPreview}` : '',
+        r.hasMoreText ? 'More text available (use browser to scroll/read)' : '',
         r.snapshotSummary ? `Snapshot: ${r.snapshotSummary}` : '',
         formatSummaryList('Top refs', r.snapshotRefs),
         formatWarnings(r.warnings),
@@ -8087,8 +8205,22 @@ function buildBrowserSnapshotSummary(snapshotItems = []) {
   const refs = items
     .slice(0, 8)
     .map((item) => `${item.ref || 'node'} | ${item.role || 'node'} | ${normalizeLine(item.label || '', 100)}`);
+
+  const roleCounts = {};
+  for (const item of items) {
+    const role = item.role || 'unknown';
+    roleCounts[role] = (roleCounts[role] || 0) + 1;
+  }
+  const roleSummary = Object.entries(roleCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([role, count]) => `${count}x ${role}`)
+    .join(', ');
+
   return {
-    summary: items.length ? `${items.length} interactive refs disponibili` : 'nessun ref interattivo disponibile',
+    summary: items.length
+      ? `${items.length} interactive refs disponibili${roleSummary ? ` (${roleSummary})` : ''}`
+      : 'nessun ref interattivo disponibile',
     refs,
   };
 }
@@ -8186,7 +8318,8 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
               status: String(browserContent.status || '').trim(),
             },
             totalRefs: Array.isArray(browserContent.snapshotItems) ? browserContent.snapshotItems.length : null,
-            textPreview: normalizeLine(browserContent.text || '', 400),
+            textPreview: normalizeLine(browserContent.text || '', 800),
+            hasMoreText: String(browserContent.text || '').length > 800,
             snapshotSummary: snapshotSummary.summary,
             snapshotRefs: snapshotSummary.refs,
             warning: browserResult?.warning || '',

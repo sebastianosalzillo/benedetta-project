@@ -11,7 +11,7 @@
 - Last verified build: `npm run build` passed on 2026-04-02.
 - Active runtime now uses only the neutral tool loop; no browser-only execution path remains.
 - Task list aggiornata da revisione del 2026-04-02.
-- Task in esecuzione: nessuna. Ultima completata: `Aggiungere almeno un test automatico`.
+- Task in esecuzione: nessuna. Ultima completata: `Avviare transizione JSON tool-use`.
 - Coordinazione: piu agenti possono lavorare sugli stessi file; riallineare `CODEX.md` prima di ogni batch e non sovrascrivere cambi altrui.
 - Git initialized. Initial commit: `07abc1f` — 131 files, 209,433 lines.
 
@@ -56,6 +56,10 @@
 - Added an automatic ACP smoke test.
   - `npm run test:smoke` now launches the local Qwen ACP entrypoint, performs initialize/session/new/session/prompt, and asserts assistant output.
   - `npm test` now maps to the same smoke test for a minimal automated verification path.
+- Completed the JSON tool-use transition.
+  - Canonical tool/action turns now use a single JSON envelope with ordered `segments`.
+  - `parseInlineResponse(...)` now accepts JSON envelopes even when they contain speech-only segments or mixed speech/tool segments.
+  - Legacy token/regex parsing remains only as backward-compatibility fallback.
 - Git repository initialized with .gitignore and initial commit (07abc1f).
 - Existing earlier fixes retained:
   - normalized system stream messages
@@ -91,7 +95,7 @@
 ## Notes
 - `isLikelyBrowserAutopilotTask(...)` has been fully deleted from main.js.
 - `getToolAvailability(...)` and blocked-tool reporting currently remain as executor-side capability gates, not planners.
-- The next important refactor is the JSON tool-use transition.
+- The next important refactor is measuring Kokoro latency in-app or continuing module migration where not blocked.
 - Module migration blocker: `browser-agent.js`, `computer-control.js`, `window-manager.js` have internal state (`pinchtabProcess`, `pywinautoMcpProcess`, `avatarWindow`, ecc.) shared with main.js functions. Importing them requires dependency injection or state getter/setters — a deeper refactor.
 - ACP runtime converged: `main.js` no longer carries a second inline ACP implementation.
 - Constant aliases (`const X = C.X`) remain in main.js (48 lines). They are used throughout the file; replacing with `C.X` directly is low-priority and risky.
@@ -120,10 +124,9 @@
 - [ ] **Completare migrazione degli 8 moduli estratti**
   - Sostituire tutte le call inline in `main.js` con import dai moduli rispettivi.
   - Priorità: `state-manager.js` (lock/race), `tts-service.js` (caching).
-- [ ] **Avviare transizione JSON tool-use** (vedi `IMPLEMENTATION_PLAN.md`)
-  - Step 1: implementare `parseJsonToolCalls()`.
-  - Step 2: aggiornare `parseInlineResponse()` con fallback regex durante transizione.
-  - Step 3-7: seguire il piano nel file.
+- [x] **Avviare transizione JSON tool-use**
+  - I turni con tool/azioni usano ora come formato canonico un envelope JSON con `segments` ordinati.
+  - `parseInlineResponse()` accetta il formato canonico e mantiene il fallback legacy solo per compatibilita`.
 - [x] **Aggiungere almeno un test automatico**
   - Integrare `test_acp.js` come `npm test` o `npm run test:smoke`.
   - Minimo: `npm run build` passa + una chiamata ACP base funzionante.
