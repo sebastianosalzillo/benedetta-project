@@ -136,6 +136,29 @@ const {
   readPywinautoActiveWindowDetails: ccReadPywinautoActiveWindowDetails,
   getPywinautoMcpLogTail: ccGetPywinautoMcpLogTail,
 } = require('./computer-control');
+const {
+  normalizeBrowserUrl: baNormalizeBrowserUrl,
+  buildBrowserTitleFromUrl: baBuildBrowserTitleFromUrl,
+  normalizeCanvasLayout: baNormalizeCanvasLayout,
+  parsePinchtabSnapshotText: baParsePinchtabSnapshotText,
+  trimBrowserText: baTrimBrowserText,
+  getActiveBrowserSnapshotItem: baGetActiveBrowserSnapshotItem,
+  getBrowserSnapshotItemByRef: baGetBrowserSnapshotItemByRef,
+  extractSnapshotItemLabelText: baExtractSnapshotItemLabelText,
+  extractSnapshotItemValue: baExtractSnapshotItemValue,
+  isTextInputFallbackCandidate: baIsTextInputFallbackCandidate,
+  isClickFallbackCandidate: baIsClickFallbackCandidate,
+  sanitizeBrowserActionText: baSanitizeBrowserActionText,
+  getBrowserComparableState: baGetBrowserComparableState,
+  didBrowserStateChange: baDidBrowserStateChange,
+  didBrowserClickProgress: baDidBrowserClickProgress,
+  isPinchtabRecoverableActionError: baIsPinchtabRecoverableActionError,
+  isPinchtabRouteNotFoundError: baIsPinchtabRouteNotFoundError,
+  isYouTubeSearchRef: baIsYouTubeSearchRef,
+  buildYouTubeSearchUrl: baBuildYouTubeSearchUrl,
+  summarizeBrowserDirective: baSummarizeBrowserDirective,
+  summarizeBrowserReason: baSummarizeBrowserReason,
+} = require('./browser-agent');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 // Constants now available from ./constants.js (C.* references)
