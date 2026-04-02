@@ -21,8 +21,7 @@
 | `REVIEW.md` | Code review formali per task/PR completati | Revisore compila review prima del merge |
 | `DECISIONI.md` | Decisioni architetturali (ADR) tracciate e motivate | Architect documenta decisioni importanti |
 | `ANTIGRAVITY.md` | Analisi approfondita architettura e codice | Consultare per comprensione completa del sistema |
-| `PROJECT_STATUS.md` | Stato fasi di sviluppo e roadmap | Riferimento per milestone e deliverable |
-| `ROADMAP.md` | Feature future e visione lungo termine | Pianificazione e priorizzazione |
+| `design-system.md` | Design system UI (da creare) | UI Specialist definisce colori, tipografia, componenti |
 
 ---
 
@@ -129,12 +128,14 @@
 ```
 1. Legge TASK.md e identifica task assegnate
 2. Verifica dipendenze e prerequisiti (proposte approvate, ricerche)
-3. Implementa in batch piccoli e verificabili
-4. Esegue `npm run build` dopo ogni batch
-5. Esegue `npm run test:smoke` se pertinente
-6. Commit con messaggio descrittivo
-7. Aggiorna TASK.md: stato, commit link, note
-8. Se blocca → aggiorna TASK.md e notifica in CODEX.md
+3. Esegue `git status` per verificare stato repo
+4. Implementa in batch piccoli e verificabili
+5. Esegue `npm run build` dopo ogni batch
+6. Esegue `npm run test:smoke` se pertinente
+7. `git add .` per file modificati
+8. `git commit -m "messaggio con task ID"` 
+9. Aggiorna TASK.md: stato, commit link, note
+10. Se blocca → aggiorna TASK.md e notifica in CODEX.md
 ```
 
 **Convenzioni di codice:**
@@ -231,6 +232,112 @@
 
 ---
 
+### UI Specialist
+
+**Responsabilità:**
+- Progettare e mantenere coerenza visiva dell'interfaccia (React components)
+- Garantire usabilità, accessibilità (a11y) e user experience
+- Definire design system: palette colori, tipografia, spacing, componenti
+- Ottimizzare layout per responsive e diverse risoluzioni
+- Progettare animazioni e micro-interazioni (transizioni, feedback visivi)
+- Condurre user testing e raccogliere feedback sull'interfaccia
+
+**Workflow:**
+```
+1. Analizza UI esistente o nuova feature da implementare
+2. Definisce/revisa design system e pattern visivi
+3. Crea mockup o prototipi (Figma, schizzi, o codice diretto)
+4. Implementa o coordina implementazione con Costruttore
+5. Testa usabilità: navigazione, accessibilità, responsive
+6. Documenta pattern UI in documentazione progetto
+7. Raccoglie feedback utente e itera su miglioramenti
+```
+
+**Strumenti:**
+- Figma o strumenti di design per mockup
+- React DevTools per analisi componenti
+- Lighthouse per audit accessibilità e performance
+- User testing (osservazione diretta, registrazioni)
+
+**Criteri di qualità UI:**
+- [ ] Coerenza visiva (colori, font, spacing uniformi)
+- [ ] Accessibilità WCAG AA (contrasti, keyboard navigation, screen reader)
+- [ ] Responsive (funziona su diverse risoluzioni)
+- [ ] Performance (nessun layout shift, animazioni fluide 60fps)
+- [ ] Usabilità (flusso intuitivo, feedback chiari, error handling visibile)
+
+**Output atteso:**
+- Design system documentato (colori, tipografia, componenti)
+- UI coerente in tutte le finestre (avatar, chat, canvas)
+- Audit accessibilità con score Lighthouse ≥90
+- Pattern UI riutilizzabili documentati
+- Mockup/prototipi per nuove feature
+
+---
+
+## Ruoli Futuri (Non Ancora Attivi)
+
+Questi ruoli saranno attivati quando il progetto raggiungerà determinate milestone.
+
+### Security Specialist (Da attivare - Phase 7)
+
+**Quando attivare:** Prima del packaging Windows e distribuzione.
+
+**Responsabilità:**
+- Audit sicurezza: injection, secrets, validazione input, IPC security
+- Review dipendenze per vulnerabilità note (npm audit)
+- Hardening Electron: sandbox, contextIsolation, nodeIntegration
+- Security testing: penetration test, fuzzing input
+- Definire security policy e best practice
+
+**Workflow:**
+```
+1. Analizza superfici di attacco (shell, file, IPC, browser automation)
+2. Esegue audit automatico (npm audit, electron-builder security)
+3. Review manuale codice per injection e secrets esposte
+4. Documenta vulnerabilità per severità
+5. Definisce fix e hardening required
+6. Verifica fix applicati prima del release
+```
+
+**Output atteso:**
+- Report sicurezza con vulnerabilità e fix
+- Dipendenze aggiornate e senza CVE critiche
+- Electron hardening applicato
+- Security checklist per release
+
+---
+
+### DevOps / Release Manager (Da attivare - Phase 7)
+
+**Quando attivare:** Prima del packaging Windows e distribuzione.
+
+**Responsabilità:**
+- Build automation e CI/CD pipeline
+- Windows installer packaging (electron-builder)
+- Versioning semantico e changelog
+- Distribuzione e aggiornamenti automatici
+- Monitoraggio crash e performance post-release
+
+**Workflow:**
+```
+1. Configura pipeline build automatica (GitHub Actions o simile)
+2. Setup electron-builder per Windows installer
+3. Definisce versioning semantico (major.minor.patch)
+4. Genera changelog da commit e task completate
+5. Configura aggiornamenti automatici (electron-updater)
+6. Monitora crash report e performance post-release
+```
+
+**Output atteso:**
+- Installer Windows funzionante (.exe o .msi)
+- CI/CD pipeline automatizzata
+- Changelog versionato per release
+- Sistema di aggiornamenti automatici
+- Dashboard monitoraggio crash/performance
+
+---
+
 ## Flusso di Lavoro Multi-Agente
 
 ```
@@ -278,6 +385,28 @@
 4. **Build verde:** `npm run build` deve passare dopo ogni cambiamento
 5. **Test smoke:** `npm run test:smoke` per verifiche rapide
 6. **Documentazione:** Aggiornare il file pertinente dopo ogni cambiamento
+7. **Git sempre:** Ogni cambiamento deve essere committato con messaggio descrittivo
+
+---
+
+## Regole Git
+
+**Obbligatorio:**
+- `git status` prima di iniziare lavoro
+- `git add .` per file modificati
+- `git commit -m "messaggio chiaro"` dopo ogni task completata
+- `git log -n 3` per verificare stile messaggi
+- `git status` dopo commit per verificare successo
+
+**Messaggi di commit:**
+- Usare imperativo presente: "Migrare X", "Fix Y", "Aggiornare Z"
+- Includere riferimenti a task/task: "T003a", "PROPOSTE.md #001"
+- Essere concisi ma descrittivi (max 72 caratteri prima riga)
+
+**Branch:**
+- Default: `master` per cambiamenti diretti
+- Feature grandi: `feature/<nome>-<data>` (es. `feature/module-migration-0402`)
+- Merge solo dopo review e build verde
 
 ---
 
@@ -309,6 +438,45 @@ Portare il runtime a **`model-planned agent with server execution`**:
 - **Ultimo commit:** Da verificare con `git log -n 1`
 - **User:** `salzi <salzi@local>`
 - **.gitignore:** `node_modules/`, `dist/`, `__pycache__/`, `.pinchtab-profile/`, `*.log`, `.env`
+
+---
+
+## Fasi di Sviluppo
+
+| Fase | Descrizione | Stato | Note |
+|------|-------------|-------|------|
+| 0 | Project setup, scaffold Electron + React | ✅ Completato | Vite 7, React 18, Electron 40 |
+| 1 | Transparent desktop shell + click-through | ✅ Completato | Frameless, always-on-top |
+| 2 | Avatar host (NyxAvatar + TalkingHead) | ✅ Completato | WebGL, lip-sync, 55 emoji |
+| 3 | Chat UI (streaming, stop, history) | ✅ Completato | AvatarChat, CanvasWorkspace |
+| 4 | ACP brain integration (Qwen via ACP) | ✅ Completato | Direct stdio, session resume |
+| 5 | TTS + lip sync (Kokoro, if_sara) | ✅ Completato | HTTP service, caching |
+| 6 | Emotion, gesture, facial reactions | ✅ Completato | ACT tokens, mood/pose/gesture |
+| 7 | Polish, packaging Windows | 🔄 Inizio | Installer, hardening, CI/CD |
+
+---
+
+## Roadmap Tool (Priorità)
+
+**Completati:**
+- ✅ `browser` — PinchTab automation (navigate, action, snapshot)
+- ✅ `computer` — PowerShell desktop control (mouse, keyboard, screenshot, OCR)
+- ✅ `canvas` — Rich media panel (text, clipboard, image, video, audio, files)
+- ✅ `workspace` — Markdown persistence (USER.md, MEMORY.md, sessions)
+- ✅ `shell` — Command execution (run, background, stop)
+- ✅ `read_file`, `write_file`, `edit_file`, `delete_file`, `list_directory`
+- ✅ `glob`, `grep`, `read_many_files`
+- ✅ `git` — status, diff, log, add, commit, branch, checkout
+- ✅ `web_fetch`, `web_search`
+- ✅ `task` — TASK/TODOLIST management
+- ✅ `apply_patch` — Unified diff application
+
+**Da implementare (vedi TASK.md):**
+- Migrazione moduli con stato condiviso (T003a/b/c)
+- Test unitari moduli migrati (T005)
+- Packaging Windows installer (T006)
+- Live canvas production (T007)
+- Skills reali (T008)
 
 ---
 
@@ -399,15 +567,25 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | 2026-04-02 | Agente Revisore (AI) | Review PROPOSTE.md #001 | ✅ Approvata con modifiche, Opzione C selezionata |
 | 2026-04-02 | Agente Revisore (AI) | Aggiornato DECISIONI.md | ADR-002 approvata |
 | 2026-04-02 | Agente Revisore (AI) | Aggiornato TASK.md | Task T003a/b/c pronte, blocco rimosso |
+| 2026-04-02 | Agente analisi | Aggiunto ruolo UI Specialist | 7 ruoli attivi + 2 futuri |
+| 2026-04-02 | Agente analisi | Aggiunti Ruoli Futuri: Security Specialist, DevOps | Da attivare in Phase 7 |
+| 2026-04-02 | Agente analisi | Cancellati PROJECT_STATUS.md, ROADMAP.md | Non integrati, info migrate in CODEX.md |
+| 2026-04-02 | Agente analisi | Aggiunte Fasi di Sviluppo + Roadmap Tool | Phase 0-7, tool completati vs da fare |
 | 2026-04-02 | Codex | Completata transizione JSON tool-use | Commit `818765f`, formato canonico `segments` |
 | 2026-04-02 | Codex | Misurata latenza Kokoro in-app | Commit `5269361`, cold start ~10.16s, synth warm ~93ms |
-| 2026-04-02 | Kilo (Revisore 2) | Completata revisione PROPOSTE.md #001 | ✅ Approvato con note — confermata Opzione C, sequenza browser-agent→window-manager→cleanup |
+| 2026-04-02 | Kilo (Revisore 2) | Completata revisione PROPOSTE.md #001 | ✅ Approvato con note — confermata Opzione C |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | Migrazione computer-control.js | ✅ T003b completato, -109 righe duplicate, commit `d60234e` |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | browser-agent auth token getter/setter, window-manager utility imports | Parziale T003a/T003c, commit `601ad79` |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | Bloccato T003a/T003c, aggiunti T004b/T004c | Service functions accoppiate a helper main.js-specifici, commit `cddb148` |
 
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Prossima azione: **Costruttore** inizia migrazione T003a (browser-agent.js) — 2/2 review complete*
-*Ruoli disponibili: Ricercatore, Revisore, Costruttore, Architect, QA/Tester, Documenter*
-*Task pronte: T003a, T003b, T003c (Ready)*
+*Prossima azione: **Costruttore** esegue T004b (spostare 14 helper browser-agent in modulo) o T004c (refactor stato globale finestre) — vedi TASK.md*
+*Ruoli disponibili: Ricercatore, Revisore, Costruttore, Architect, QA/Tester, Documenter, UI Specialist (7 attivi)*
+*Ruoli futuri: Security Specialist, DevOps/Release Manager (da attivare in Phase 7)*
+*Task pronte: T004b, T004c (Ready) — T003a/b/c bloccati o completati*
 *Decisioni approvate: ADR-001 (struttura file), ADR-002 (incapsulamento moduli)*
 *Review complete: PROPOSTE.md #001 (2/2 revisori)*
+*Fasi: Phase 0-6 completate, Phase 7 (packaging) in inizio*
+*Tool: 20+ implementati, migrazione moduli in corso*
