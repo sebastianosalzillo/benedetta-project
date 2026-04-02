@@ -423,7 +423,7 @@ Portare il runtime a **`model-planned agent with server execution`**:
 
 - **Stato:** In progress
 - **Area di lavoro attiva:** `electron/main.js`, `browser-agent.js`, `window-manager.js`
-- **Ultima build verificata:** `npm run build` — errore EPERM su dist/talkinghead (lock Windows, non codice)
+- **Ultima build verificata:** `npm run build` passata il 2026-04-02
 - **Task in esecuzione:** Cleanup duplicati browser-agent (agent: opencode/mimo-v2-pro-free)
 - **Ultima task completata:** computer-control.js migrato (T003b, commit `d60234e`), T002 junk file rimosso
 - **Blocco corrente:** T003a/T003c bloccati — 29 funzioni duplicate browser-agent + 15 funzioni window-manager restano in main.js. Alias creati per compatibilita'. Rimozione completa richiede editing chirurgico.
@@ -435,7 +435,7 @@ Portare il runtime a **`model-planned agent with server execution`**:
 ## Git
 
 - **Repository:** Inizializzato il 2026-04-02
-- **Ultimo commit:** Da verificare con `git log -n 1`
+- **Ultimo commit:** `2ac277e` — T004b partial (aliases browser-agent, T002 junk rimosso)
 - **User:** `salzi <salzi@local>`
 - **.gitignore:** `node_modules/`, `dist/`, `__pycache__/`, `.pinchtab-profile/`, `*.log`, `.env`
 
@@ -516,8 +516,8 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | `skills.js` | ✅ Importato | Caricamento skill |
 | `apply-patch.js` | ✅ Importato | Patch diff unificato |
 | `renderer-loop.js` | ✅ Importato | IPC utilities |
-| `window-manager.js` | ❌ NON importato | Bloccato: create*Window inline in main.js |
-| `browser-agent.js` | ⚠️ Parziale | Utility importate, service functions duplicate (ensure/stop/request) |
+| `window-manager.js` | ⚠️ Parziale | 4 utility pure importate, create*Window inline |
+| `browser-agent.js` | ⚠️ Parziale | 21 utility + 18 alias importati, 29 funzioni duplicate restano in main.js |
 | `computer-control.js` | ✅ Importato | Migrato, nessuna funzione duplicata residua |
 
 ---
@@ -578,6 +578,7 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | browser-agent auth token getter/setter, window-manager utility imports | Parziale T003a/T003c, commit `601ad79` |
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | Bloccato T003a/T003c, aggiunti T004b/T004c | Service functions accoppiate a helper main.js-specifici, commit `cddb148` |
 | 2026-04-02 | Kilo (Architect) | ADR-003 — Sblocco T003a/T003c | Rimozione duplicati browser-agent + factory window-manager |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T002 junk rimosso, T004b partial (18 alias browser-agent), CODEX allineato | Commit `2ac277e`, build verde |
 
 ---
 
