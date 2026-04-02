@@ -9,6 +9,7 @@ function AvatarChat({
   onOpenSettings,
   canStop,
   isBusy,
+  isThinking,
   streamStatus,
   ttsStatus,
   ttsLatencyMs,
@@ -19,6 +20,7 @@ function AvatarChat({
 }) {
   const [input, setInput] = useState('');
   const listRef = useRef(null);
+  const textareaRef = useRef(null);
 
   useEffect(() => {
     const container = listRef.current;
@@ -27,12 +29,19 @@ function AvatarChat({
   }, [messages]);
 
   async function submit(event) {
-    event.preventDefault();
+    event?.preventDefault?.();
     const text = input.trim();
     if (!text || isBusy) return;
-
     setInput('');
+    textareaRef.current?.focus();
     await onSend(text);
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      submit();
+    }
   }
 
   const showWorkspaceCard = Boolean(
@@ -43,62 +52,65 @@ function AvatarChat({
     ),
   );
 
+  const streamBadge = streamStatus === 'streaming' ? 'streaming'
+    : streamStatus === 'connected' ? 'connected'
+    : streamStatus === 'wait' ? 'wait'
+    : streamStatus === 'speaking' ? 'speaking'
+    : streamStatus === 'error' ? 'error'
+    : 'off';
+
   return (
     <div className="chat-shell">
+
+      {/* ── Toolbar ───────────────────────────────────────────── */}
       <div className="chat-toolbar">
         <button
           type="button"
           className={`toolbar-pill ${windowPrefs.avatarAlwaysOnTop ? 'toolbar-pill-active' : ''}`}
           onClick={() => onToggleAlwaysOnTop('avatar')}
+          title="Toggle avatar always-on-top"
         >
-          Avatar top {windowPrefs.avatarAlwaysOnTop ? 'on' : 'off'}
+          Avatar {windowPrefs.avatarAlwaysOnTop ? '📌' : '·'}
         </button>
         <button
           type="button"
           className={`toolbar-pill ${windowPrefs.chatAlwaysOnTop ? 'toolbar-pill-active' : ''}`}
           onClick={() => onToggleAlwaysOnTop('chat')}
+          title="Toggle chat always-on-top"
         >
-          Chat top {windowPrefs.chatAlwaysOnTop ? 'on' : 'off'}
-        </button>
-        <button
-          type="button"
-          className="toolbar-pill toolbar-pill-stop"
-          onClick={onStop}
-          disabled={!canStop}
-        >
-          Stop
+          Chat {windowPrefs.chatAlwaysOnTop ? '📌' : '·'}
         </button>
         <div className="toolbar-pill">
-          Stream {streamStatus || 'disconnected'}
+          {streamBadge === 'streaming' ? '⚡' : streamBadge === 'error' ? '✗' : '·'} {streamBadge}
         </div>
-        <div className="toolbar-pill">
-          TTS {ttsStatus || 'idle'}{Number.isFinite(ttsLatencyMs) ? ` ${ttsLatencyMs}ms` : ''}
-        </div>
+        {ttsStatus && ttsStatus !== 'idle' && (
+          <div className="toolbar-pill">
+            🔊 {ttsStatus}{Number.isFinite(ttsLatencyMs) ? ` ${ttsLatencyMs}ms` : ''}
+          </div>
+        )}
         <button
           type="button"
           className="toolbar-pill"
           onClick={onOpenSettings}
         >
-          Impostazioni
+          ⚙ Impostazioni
         </button>
       </div>
 
+      {/* ── Workspace bootstrap card ──────────────────────────── */}
       {showWorkspaceCard && (
         <div className={`workspace-card ${workspace.bootstrapPending ? 'workspace-card-pending' : ''}`}>
           <div className="workspace-header">
             <div>
               <div className="workspace-eyebrow">Workspace</div>
-              <div className="workspace-title">OpenClaw-style bootstrap</div>
+              <div className="workspace-title">Bootstrap in corso</div>
             </div>
             <div className="workspace-pills">
-              <span className="workspace-pill">{workspace.bootstrapPending ? 'bootstrap pending' : 'bootstrap ready'}</span>
+              <span className="workspace-pill">{workspace.bootstrapPending ? 'pending' : 'ready'}</span>
               {workspace.bootstrapActive && (
-                <span className="workspace-pill">
-                  round {workspace.bootstrapStepIndex || 1}
-                </span>
+                <span className="workspace-pill">step {workspace.bootstrapStepIndex || 1}</span>
               )}
               {workspace.startupBootPending && <span className="workspace-pill">boot pending</span>}
-              {workspace.memoryFile && <span className="workspace-pill">{workspace.memoryFile}</span>}
             </div>
           </div>
 
@@ -118,15 +130,8 @@ function AvatarChat({
 
           {workspace.bootstrapQuestion && (
             <div className="workspace-line">
-              <span className="workspace-label">Question</span>
+              <span className="workspace-label">Domanda</span>
               <span>{workspace.bootstrapQuestion}</span>
-            </div>
-          )}
-
-          {workspace.dailyNotes?.length > 0 && (
-            <div className="workspace-line">
-              <span className="workspace-label">Daily</span>
-              <span>{workspace.dailyNotes.map((note) => note.relativePath).join(', ')}</span>
             </div>
           )}
 
@@ -142,7 +147,7 @@ function AvatarChat({
 
           <div className="workspace-actions">
             <button type="button" className="toolbar-pill" onClick={onOpenWorkspace}>
-              Open workspace
+              Apri workspace
             </button>
             <button
               type="button"
@@ -156,53 +161,82 @@ function AvatarChat({
         </div>
       )}
 
+      {/* ── TTS error ─────────────────────────────────────────── */}
       {ttsLastError && (
         <div className="message message-system">
-          <div className="message-role">tts</div>
+          <div className="message-role">tts error</div>
           <div className="message-text">{ttsLastError}</div>
         </div>
       )}
 
+      {/* ── Chat log ──────────────────────────────────────────── */}
       <div ref={listRef} className="chat-log">
         {messages.length === 0 && (
           <div className="message message-system">
-            <div className="message-role">system</div>
+            <div className="message-role">sistema</div>
             <div className="message-text">
-              Nyx e un agente autonomo: decide da solo quando usare browser, desktop o rispondere direttamente. Scrivi un messaggio per iniziare.
+              Nyx è un agente autonomo — usa browser, desktop o risponde direttamente in base alla tua richiesta. Scrivi per iniziare.
             </div>
           </div>
         )}
 
         {messages.map((message) => (
-          <div key={message.id} className={`message message-${message.role}`}>
+          <div
+            key={message.id}
+            className={`message message-${message.role}${message.streaming ? ' message-streaming-active' : ''}`}
+          >
             <div className="message-role">
               {message.role}
-              {message.streaming ? ' | streaming' : ''}
-              {message.interrupted ? ' | interrupted' : ''}
+              {message.streaming ? ' · streaming' : ''}
+              {message.interrupted ? ' · interrotto' : ''}
             </div>
-            <div className="message-text">{message.text || (message.streaming ? '...' : '')}</div>
+            <div className="message-text">{message.text || (message.streaming ? '…' : '')}</div>
             {message.meta && (
               <div className="message-meta">
-                emotion: {message.meta.emotion || '-'} | mood: {message.meta.mood || '-'} | motion: {message.meta.motion || '-'} | motionType: {message.meta.motionType || '-'} | expression: {message.meta.expression || '-'}
+                {[
+                  message.meta.emotion && `emotion: ${message.meta.emotion}`,
+                  message.meta.mood && `mood: ${message.meta.mood}`,
+                  message.meta.motion && `motion: ${message.meta.motion}`,
+                  message.meta.motionType && `type: ${message.meta.motionType}`,
+                ].filter(Boolean).join('  ·  ')}
               </div>
             )}
           </div>
         ))}
+
+        {/* Typing indicator — visibile quando brain elabora ma non c'è ancora streaming */}
+        {isThinking && !messages.some((m) => m.streaming) && (
+          <div className="typing-indicator">
+            <div className="typing-dot" />
+            <div className="typing-dot" />
+            <div className="typing-dot" />
+          </div>
+        )}
       </div>
 
+      {/* ── Input form ────────────────────────────────────────── */}
       <form className="chat-form" onSubmit={submit}>
         <textarea
+          ref={textareaRef}
           value={input}
           onChange={(event) => setInput(event.target.value)}
-          placeholder="Scrivi qui..."
+          onKeyDown={handleKeyDown}
+          placeholder="Scrivi un messaggio… (Enter invia · Shift+Enter va a capo)"
           rows={3}
+          disabled={isBusy}
         />
         <div className="chat-form-actions">
-          <button type="button" className="secondary-button" onClick={onStop} disabled={!canStop}>
-            Stop
-          </button>
-          <button type="submit" disabled={isBusy}>
-            {isBusy ? 'Busy...' : 'Send'}
+          {canStop && (
+            <button type="button" className="secondary-button" onClick={onStop}>
+              ✕ Stop
+            </button>
+          )}
+          <button
+            type="submit"
+            className="chat-send-btn"
+            disabled={isBusy || !input.trim()}
+          >
+            {isBusy ? 'In elaborazione…' : 'Invia →'}
           </button>
         </div>
       </form>

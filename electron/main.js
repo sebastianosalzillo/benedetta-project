@@ -161,7 +161,45 @@ const {
   getPinchtabAuthToken: baGetPinchtabAuthToken,
   setPinchtabAuthToken: baSetPinchtabAuthToken,
   isPinchtabRunning: baIsPinchtabRunning,
+  ensurePinchtabService: baEnsurePinchtabService,
+  stopPinchtabService: baStopPinchtabService,
+  cleanupPinchtabProfile: baCleanupPinchtabProfile,
+  getPinchtabProfilePath: baGetPinchtabProfilePath,
+  hasPinchtabLauncher: baHasPinchtabLauncher,
+  probePinchtabHealth: baProbePinchtabHealth,
+  pinchtabRequest: baPinchtabRequest,
+  pinchtabRequestJson: baPinchtabRequestJson,
+  pinchtabTabRequest: baPinchtabTabRequest,
+  pinchtabTabRequestJson: baPinchtabTabRequestJson,
+  listPinchtabTabs: baListPinchtabTabs,
+  pickBestPinchtabTabId: baPickBestPinchtabTabId,
+  resolvePinchtabTabState: baResolvePinchtabTabState,
+  runPinchtabAction: baRunPinchtabAction,
+  evaluatePinchtabExpression: baEvaluatePinchtabExpression,
+  findPinchtabRef: baFindPinchtabRef,
+  killPinchtabListenerProcess: baKillPinchtabListenerProcess,
+  focusPinchtabChromeWindow: baFocusPinchtabChromeWindow,
+  createPinchtabHeaders: baCreatePinchtabHeaders,
 } = require('./browser-agent');
+// Aliases for backward compat — functions now live in browser-agent.js
+const ensurePinchtabService = baEnsurePinchtabService;
+const stopPinchtabService = baStopPinchtabService;
+const probePinchtabHealth = baProbePinchtabHealth;
+const pinchtabRequest = baPinchtabRequest;
+const pinchtabRequestJson = baPinchtabRequestJson;
+const pinchtabTabRequest = baPinchtabTabRequest;
+const pinchtabTabRequestJson = baPinchtabTabRequestJson;
+const listPinchtabTabs = baListPinchtabTabs;
+const pickBestPinchtabTabId = baPickBestPinchtabTabId;
+const resolvePinchtabTabState = baResolvePinchtabTabState;
+const runPinchtabAction = baRunPinchtabAction;
+const evaluatePinchtabExpression = baEvaluatePinchtabExpression;
+const findPinchtabRef = baFindPinchtabRef;
+const killPinchtabListenerProcess = baKillPinchtabListenerProcess;
+const focusPinchtabChromeWindow = baFocusPinchtabChromeWindow;
+const createPinchtabHeaders = baCreatePinchtabHeaders;
+const cleanupPinchtabProfile = baCleanupPinchtabProfile;
+const getPinchtabProfilePath = baGetPinchtabProfilePath;
 const {
   getDisplayById: wmGetDisplayById,
   isBoundsVisible: wmIsBoundsVisible,
@@ -265,9 +303,7 @@ let cleanupStarted = false;
 let ttsServiceProcess = null;
 let ttsServiceStartupPromise = null;
 let ttsServiceLogTail = '';
-let pinchtabProcess = null;
-let pinchtabStartupPromise = null;
-let pinchtabLogTail = '';
+// pinchtabProcess/pinchtabStartupPromise/pinchtabLogTail managed by browser-agent.js (Opzione C)
 // pywinautoMcpProcess/pywinautoMcpStartupPromise/pywinautoMcpLogTail moved to computer-control.js (Opzione C)
 let qwenAcpStderrTail = '';
 
@@ -1756,34 +1792,36 @@ function buildWorkspaceUpdateBlock(directive = {}) {
   return `\n\n${content}`;
 }
 
+// PinchTab functions moved to browser-agent.js (Opzione C)
+// Uses: baEnsurePinchtabService, baStopPinchtabService, baPinchtabRequest, baPinchtabRequestJson,
+//       baPinchtabTabRequest, baPinchtabTabRequestJson, baListPinchtabTabs, baPickBestPinchtabTabId,
+//       baResolvePinchtabTabState, baRunPinchtabAction, baEvaluatePinchtabExpression, baFindPinchtabRef,
+//       baProbePinchtabHealth, baGetPinchtabProfilePath, baCleanupPinchtabProfile,
+//       baKillPinchtabListenerProcess, baFocusPinchtabChromeWindow, baCreatePinchtabHeaders
+
 // ============================================================
-// PinchTab helper functions (missing from main.js)
+// Pywinauto functions moved to computer-control.js (Opzione C)
+
+// PinchTab functions moved to browser-agent.js (Opzione C)
+// Uses: baEnsurePinchtabService, baStopPinchtabService, baPinchtabRequest, baPinchtabRequestJson,
+//       baPinchtabTabRequest, baPinchtabTabRequestJson, baListPinchtabTabs, baPickBestPinchtabTabId,
+//       baResolvePinchtabTabState, baRunPinchtabAction, baEvaluatePinchtabExpression, baFindPinchtabRef,
+//       baProbePinchtabHealth, baGetPinchtabProfilePath, baCleanupPinchtabProfile,
+//       baKillPinchtabListenerProcess, baFocusPinchtabChromeWindow, baCreatePinchtabHeaders
+
 // ============================================================
+// Pywinauto functions moved to computer-control.js (Opzione C)
+// Uses: ccEnsurePywinautoMcpService, ccStopPywinautoMcpService, ccCallPywinautoTool,
+//       ccReadPywinautoActiveWindowDetails, ccGetPywinautoMcpLogTail
 
-function hasPinchtabLauncher() {
-  return fs.existsSync(PINCHTAB_CLI_PATH) || fs.existsSync(PINCHTAB_PS1_PATH);
+function hasGitBinary() {
+  try {
+    const result = require('child_process').spawnSync('git', ['--version'], { windowsHide: true, encoding: 'utf8' });
+    return result.status === 0;
+  } catch { return false; }
 }
 
-function getPinchtabProfilePath() {
-  const profilePath = path.join(app.getPath('userData'), 'pinchtab-profiles', 'avatar-desktop');
-  fs.mkdirSync(profilePath, { recursive: true });
-  return profilePath;
-}
-
-function getPinchtabConfigPath() {
-  return path.join(app.getPath('userData'), 'pinchtab-config.json');
-}
-
-function getPinchtabStateDir() {
-  const stateDir = path.join(app.getPath('userData'), 'pinchtab-runtime');
-  fs.mkdirSync(stateDir, { recursive: true });
-  return stateDir;
-}
-
-function getPinchtabProfilesBaseDir() {
-  const profilesDir = path.join(app.getPath('userData'), 'pinchtab-profiles');
-  fs.mkdirSync(profilesDir, { recursive: true });
-  return profilesDir;
+function appendHistoryMessage(message) {
 }
 
 function readPinchtabConfigIfPresent() {
@@ -2161,6 +2199,13 @@ async function findPinchtabRef(query = '', tabId = '') {
   }).catch(() => null);
   return String(result?.best_ref || result?.bestRef || '').trim();
 }
+
+// PinchTab functions moved to browser-agent.js (Opzione C)
+// Uses: baEnsurePinchtabService, baStopPinchtabService, baPinchtabRequest, baPinchtabRequestJson,
+//       baPinchtabTabRequest, baPinchtabTabRequestJson, baListPinchtabTabs, baPickBestPinchtabTabId,
+//       baResolvePinchtabTabState, baRunPinchtabAction, baEvaluatePinchtabExpression, baFindPinchtabRef,
+//       baProbePinchtabHealth, baGetPinchtabProfilePath, baCleanupPinchtabProfile,
+//       baKillPinchtabListenerProcess, baFocusPinchtabChromeWindow, baCreatePinchtabHeaders
 
 // ============================================================
 // Pywinauto functions moved to computer-control.js (Opzione C)

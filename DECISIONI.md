@@ -179,6 +179,48 @@ module.exports = { ensurePinchtabService, getPinchtabProcess };
 
 ---
 
+### ADR-003 — Sblocco T003a/T003c: Rimozione Duplicati e Refactor Window State
+
+**Data:** 2026-04-02
+**Stato:** ✅ Approvata
+**Proponente:** Architect (Kilo)
+**Decisione:** Architect (Kilo)
+
+### Contesto
+
+Il Costruttore è bloccato su T003a e T003c. Analisi del codice rivela:
+
+1. **T003a:** 14 helper functions + 4 service functions duplicate in `main.js` (linee 1790-2059). Le versioni in `browser-agent.js` sono già complete e migliori (usano costanti, error handling). Inoltre `main.js` ha variabili `pinchtabProcess/pinchtabStartupPromise/pinchtabLogTail` commentate (linea 287) ma le funzioni inline le referenziano — codice morto.
+
+2. **T003c:** `createAvatarWindow`, `createChatWindow`, `createCanvasWindow` inline in `main.js` (linee 8683-8855). Referenziano ~10 variabili/funzioni globali di `main.js`.
+
+### Decisione
+
+**T003a:** Eliminare completamente le ~270 righe duplicate da `main.js`. Importare dal modulo: `ensurePinchtabService`, `stopPinchtabService`, `pinchtabRequest`, `pinchtabRequestJson`, `probePinchtabHealth`, `cleanupPinchtabProfile`, `getPinchtabProfilePath`, `createPinchtabHeaders`, `getPinchtabLogTail`.
+
+**T003c:** Pattern factory per `window-manager.js`. Riceve `app`, `BrowserWindow`, e callback (`broadcastStatus`, `sendStatusToWindow`, `syncCanvasToAvatar`, `applyAlwaysOnTop`, `getStoredWindowConfig`, `persistCanvasState`, `sendCanvasState`) come dipendenze. Getter pubblici per stato finestre.
+
+### Alternative Considerate
+
+| Alternativa | Pro | Contro | Perché scartata |
+|-------------|-----|--------|-----------------|
+| Mantenere duplicati | Zero refactoring | Codice morto, divergenza | Inaccettabile |
+| Ibridare helper main + service modulo | Minimo refactoring | Accoppiamento, ciclo dipendenze | Violerebbe ADR-002 |
+| Rimozione totale + factory (scelta) | Moduli autonomi, testabili | ~50 riferimenti da aggiornare | Coerente con ADR-002 |
+
+### Conseguenze
+
+**Positive:** ~270 righe rimosse da `main.js`, moduli autonomi, niente cicli dipendenze
+**Negative:** Refactoring di ~50 riferimenti finestre in `main.js`
+
+### Riferimenti
+
+- PROPOSTE.md #001
+- ADR-002 — Incapsulamento Completo
+- TASK.md: T003a, T003c, T004b, T004c
+
+---
+
 ## Decisioni Invertite
 
 *Nessuna decisione invertita*
@@ -186,4 +228,4 @@ module.exports = { ensurePinchtabService, getPinchtabProcess };
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Decisioni totali: 2 (1 approvata, 1 proposta)*
+*Decisioni totali: 3 (2 approvate, 1 proposta)*

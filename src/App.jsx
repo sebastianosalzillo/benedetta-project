@@ -465,48 +465,53 @@ function App() {
       <div className="hud-panel">
         <div className="hud-header">
           <div>
-            <div className="eyebrow">Avatar ACP Desktop</div>
-            <h1>NyxAvatar Runtime V1</h1>
+            <div className="eyebrow">Nyx · Avatar ACP Desktop</div>
+            <h1>{appState.brain?.selectedLabel || 'Nyx'}</h1>
           </div>
           <div className={`status-pill status-${appState.status}`}>{statusLabel}</div>
         </div>
 
         <div className="hud-meta">
-          <span>Mode: {appState.mode}</span>
+          <span>{appState.mode}</span>
           <span>{streamLabel}</span>
-          <span>Stack: NyxAvatar + {appState.ttsProvider}</span>
-          <span>Brain: {appState.brain?.selectedLabel || 'ACP direct'}</span>
+          <span>TTS {appState.ttsProvider || 'Kokoro'}</span>
+          {appState.ttsLatencyMs != null && <span>{appState.ttsLatencyMs}ms</span>}
         </div>
 
         {activePanel === 'settings' ? (
-          <SettingsPanel
-            brain={appState.brain}
-            onBack={() => setActivePanel('chat')}
-            onSelectBrain={handleSelectBrain}
-            onSaveOllama={handleSaveOllama}
-            onTestBrain={handleTestBrain}
-            testResult={brainTest}
-            testPending={brainTestPending}
-            isBusy={Boolean(appState.activeRequestId)}
-          />
+          <div key="settings" className="settings-enter">
+            <SettingsPanel
+              brain={appState.brain}
+              onBack={() => setActivePanel('chat')}
+              onSelectBrain={handleSelectBrain}
+              onSaveOllama={handleSaveOllama}
+              onTestBrain={handleTestBrain}
+              testResult={brainTest}
+              testPending={brainTestPending}
+              isBusy={Boolean(appState.activeRequestId)}
+            />
+          </div>
         ) : (
-          <AvatarChat
-            messages={messages}
-            onSend={handleSend}
-            onStop={handleStop}
-            onOpenWorkspace={handleOpenWorkspace}
-            onCompleteBootstrap={handleCompleteBootstrap}
-            onOpenSettings={() => setActivePanel('settings')}
-            canStop={Boolean(appState.activeRequestId)}
-            isBusy={appState.status === 'thinking' || appState.streamStatus === 'wait' || appState.streamStatus === 'streaming'}
-            streamStatus={appState.streamStatus}
-            ttsStatus={appState.ttsStatus}
-            ttsLatencyMs={appState.ttsLatencyMs}
-            ttsLastError={appState.ttsLastError}
-            workspace={appState.workspace}
-            windowPrefs={appState.windowPrefs}
-            onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
-          />
+          <div key="chat" className="chat-enter" style={{ display: 'contents' }}>
+            <AvatarChat
+              messages={messages}
+              onSend={handleSend}
+              onStop={handleStop}
+              onOpenWorkspace={handleOpenWorkspace}
+              onCompleteBootstrap={handleCompleteBootstrap}
+              onOpenSettings={() => setActivePanel('settings')}
+              canStop={Boolean(appState.activeRequestId)}
+              isBusy={appState.status === 'thinking' || appState.streamStatus === 'wait' || appState.streamStatus === 'streaming'}
+              isThinking={appState.status === 'thinking'}
+              streamStatus={appState.streamStatus}
+              ttsStatus={appState.ttsStatus}
+              ttsLatencyMs={appState.ttsLatencyMs}
+              ttsLastError={appState.ttsLastError}
+              workspace={appState.workspace}
+              windowPrefs={appState.windowPrefs}
+              onToggleAlwaysOnTop={handleToggleAlwaysOnTop}
+            />
+          </div>
         )}
       </div>
     </div>

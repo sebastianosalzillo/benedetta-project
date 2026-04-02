@@ -422,13 +422,13 @@ Portare il runtime a **`model-planned agent with server execution`**:
 ## Current Status
 
 - **Stato:** In progress
-- **Area di lavoro attiva:** `electron/main.js`, `browser-agent.js`, `computer-control.js`, `window-manager.js`
-- **Ultima build verificata:** `npm run build` passata il 2026-04-02
-- **Task in esecuzione:** T003a/b/c — Migrazione moduli (agent: opencode/mimo-v2-pro-free)
-- **Ultima task completata:** computer-control.js migrato, browser-agent auth token in modulo, window-manager utilities importate
-- **Blocco corrente:** Service functions browser-agent restano in main.js (versioni enhanced). State pinchtabProcess/pinchtabStartupPromise in main.js.
-- **Decisione architetturale:** ADR-002 — Incapsulamento Completo per migrazione moduli
-- **Prossima azione:** Costruttore può iniziare migrazione da T003a (browser-agent.js)
+- **Area di lavoro attiva:** `electron/main.js`, `browser-agent.js`, `window-manager.js`
+- **Ultima build verificata:** `npm run build` — errore EPERM su dist/talkinghead (lock Windows, non codice)
+- **Task in esecuzione:** Cleanup duplicati browser-agent (agent: opencode/mimo-v2-pro-free)
+- **Ultima task completata:** computer-control.js migrato (T003b, commit `d60234e`), T002 junk file rimosso
+- **Blocco corrente:** T003a/T003c bloccati — 29 funzioni duplicate browser-agent + 15 funzioni window-manager restano in main.js. Alias creati per compatibilita'. Rimozione completa richiede editing chirurgico.
+- **Decisione architetturale:** ADR-002 — Incapsulamento Completo (già approvata)
+- **Prossima azione:** Rimuovere 29 funzioni duplicate browser-agent da main.js (usando alias esistenti come ponte)
 
 ---
 
@@ -577,15 +577,16 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | Migrazione computer-control.js | ✅ T003b completato, -109 righe duplicate, commit `d60234e` |
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | browser-agent auth token getter/setter, window-manager utility imports | Parziale T003a/T003c, commit `601ad79` |
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | Bloccato T003a/T003c, aggiunti T004b/T004c | Service functions accoppiate a helper main.js-specifici, commit `cddb148` |
+| 2026-04-02 | Kilo (Architect) | ADR-003 — Sblocco T003a/T003c | Rimozione duplicati browser-agent + factory window-manager |
 
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Prossima azione: **Costruttore** esegue T004b (spostare 14 helper browser-agent in modulo) o T004c (refactor stato globale finestre) — vedi TASK.md*
+*Prossima azione: **Costruttore** esegue T004b (rimuovere ~270 righe duplicate da main.js, importare da browser-agent.js) poi T004c (refactor window-manager factory) — vedi TASK.md*
 *Ruoli disponibili: Ricercatore, Revisore, Costruttore, Architect, QA/Tester, Documenter, UI Specialist (7 attivi)*
 *Ruoli futuri: Security Specialist, DevOps/Release Manager (da attivare in Phase 7)*
 *Task pronte: T004b, T004c (Ready) — T003a/b/c bloccati o completati*
-*Decisioni approvate: ADR-001 (struttura file), ADR-002 (incapsulamento moduli)*
+*Decisioni approvate: ADR-001 (struttura file), ADR-002 (incapsulamento moduli), ADR-003 (sblocco T003a/T003c)*
 *Review complete: PROPOSTE.md #001 (2/2 revisori)*
 *Fasi: Phase 0-6 completate, Phase 7 (packaging) in inizio*
 *Tool: 20+ implementati, migrazione moduli in corso*
