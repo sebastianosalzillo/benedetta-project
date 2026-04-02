@@ -158,7 +158,16 @@ const {
   buildYouTubeSearchUrl: baBuildYouTubeSearchUrl,
   summarizeBrowserDirective: baSummarizeBrowserDirective,
   summarizeBrowserReason: baSummarizeBrowserReason,
+  getPinchtabAuthToken: baGetPinchtabAuthToken,
+  setPinchtabAuthToken: baSetPinchtabAuthToken,
+  isPinchtabRunning: baIsPinchtabRunning,
 } = require('./browser-agent');
+const {
+  getDisplayById: wmGetDisplayById,
+  isBoundsVisible: wmIsBoundsVisible,
+  getWindowLayout: wmGetWindowLayout,
+  getCanvasBoundsForLayout: wmGetCanvasBoundsForLayout,
+} = require('./window-manager');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 // Constants now available from ./constants.js (C.* references)
@@ -174,7 +183,7 @@ const PINCHTAB_HOST = C.PINCHTAB_HOST;
 const PINCHTAB_PORT = C.PINCHTAB_PORT;
 const PINCHTAB_URL = C.PINCHTAB_URL;
 const PINCHTAB_TOKEN = C.PINCHTAB_TOKEN;
-let pinchtabAuthToken = PINCHTAB_TOKEN;
+// pinchtabAuthToken now managed by browser-agent.js module (use baGetPinchtabAuthToken / baSetPinchtabAuthToken)
 const PINCHTAB_HEADLESS = C.PINCHTAB_HEADLESS;
 const PINCHTAB_STARTUP_TIMEOUT_MS = C.PINCHTAB_STARTUP_TIMEOUT_MS;
 const PYWINAUTO_MCP_REPO_URL = C.PYWINAUTO_MCP_REPO_URL;
@@ -1786,12 +1795,12 @@ function readPinchtabConfigIfPresent() {
 }
 
 function syncPinchtabAuthTokenFromConfig() {
-  if (PINCHTAB_TOKEN) { pinchtabAuthToken = PINCHTAB_TOKEN; return pinchtabAuthToken; }
+  if (PINCHTAB_TOKEN) { baSetPinchtabAuthToken(PINCHTAB_TOKEN); return baGetPinchtabAuthToken(); }
   const existing = readPinchtabConfigIfPresent();
   const configToken = String(existing?.server?.token || '').trim();
-  if (configToken) { pinchtabAuthToken = configToken; return pinchtabAuthToken; }
-  pinchtabAuthToken = require('crypto').randomUUID().replace(/-/g, '');
-  return pinchtabAuthToken;
+  if (configToken) { baSetPinchtabAuthToken(configToken); return baGetPinchtabAuthToken(); }
+  baSetPinchtabAuthToken(require('crypto').randomUUID().replace(/-/g, ''));
+  return baGetPinchtabAuthToken();
 }
 
 function ensurePinchtabConfig(profilePath) {
@@ -1799,7 +1808,7 @@ function ensurePinchtabConfig(profilePath) {
   const stateDir = getPinchtabStateDir();
   const profilesDir = getPinchtabProfilesBaseDir();
   const resolvedToken = syncPinchtabAuthTokenFromConfig();
-  pinchtabAuthToken = resolvedToken;
+  baSetPinchtabAuthToken(resolvedToken);
   const nextConfig = {
     configVersion: 1,
     server: { bind: PINCHTAB_HOST, port: String(PINCHTAB_PORT), stateDir, token: resolvedToken },
@@ -2000,7 +2009,7 @@ async function ensurePinchtabService() {
           BRIDGE_HEADLESS: PINCHTAB_HEADLESS ? 'true' : 'false',
           BRIDGE_PROFILE: profilePath,
           BRIDGE_NO_RESTORE: 'true',
-          ...(pinchtabAuthToken ? { PINCHTAB_TOKEN: pinchtabAuthToken, BRIDGE_TOKEN: pinchtabAuthToken } : {}),
+          ...(baGetPinchtabAuthToken() ? { PINCHTAB_TOKEN: baGetPinchtabAuthToken(), BRIDGE_TOKEN: baGetPinchtabAuthToken() } : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -2034,7 +2043,7 @@ async function pinchtabRequest(endpoint, options = {}) {
     const normalizedDetail = String(detail || '').toLowerCase();
     if (normalizedDetail.includes('unauthorized') || normalizedDetail.includes('bad_token')) {
       appendPinchtabLog(`unauthorized response for ${endpoint}, restarting bridge`, 'auth');
-      pinchtabAuthToken = '';
+      baSetPinchtabAuthToken('');
       killPinchtabListenerProcess();
       stopPinchtabService();
       await ensurePinchtabService();

@@ -396,6 +396,9 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | 2026-04-02 | Agente analisi | Aggiunti ruoli: Architect, QA/Tester, Documenter | 6 ruoli totali |
 | 2026-04-02 | Agente analisi | Creati REVIEW.md, DECISIONI.md | Review formali + ADR |
 | 2026-04-02 | Agente analisi | Aggiornato flusso multi-agente con tutti i file | Diagramma completo |
+| 2026-04-02 | Agente Revisore (AI) | Review PROPOSTE.md #001 | ✅ Approvata con modifiche, Opzione C selezionata |
+| 2026-04-02 | Agente Revisore (AI) | Aggiornato DECISIONI.md | ADR-002 approvata |
+| 2026-04-02 | Agente Revisore (AI) | Aggiornato TASK.md | Task T003a/b/c pronte, blocco rimosso |
 | 2026-04-02 | Codex | Completata transizione JSON tool-use | Commit `818765f`, formato canonico `segments` |
 | 2026-04-02 | Codex | Misurata latenza Kokoro in-app | Commit `5269361`, cold start ~10.16s, synth warm ~93ms |
 | 2026-04-02 | Kilo (Revisore 2) | Completata revisione PROPOSTE.md #001 | ✅ Approvato con note — confermata Opzione C, sequenza browser-agent→window-manager→cleanup |
@@ -403,5 +406,8 @@ Portare il runtime a **`model-planned agent with server execution`**:
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Prossima azione: Assegnare PROPOSTE.md #001 al Costruttore — 2/2 revisioni complete*
+*Prossima azione: **Costruttore** inizia migrazione T003a (browser-agent.js) — 2/2 review complete*
 *Ruoli disponibili: Ricercatore, Revisore, Costruttore, Architect, QA/Tester, Documenter*
+*Task pronte: T003a, T003b, T003c (Ready)*
+*Decisioni approvate: ADR-001 (struttura file), ADR-002 (incapsulamento moduli)*
+*Review complete: PROPOSTE.md #001 (2/2 revisori)*

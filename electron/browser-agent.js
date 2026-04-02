@@ -947,6 +947,9 @@ module.exports = {
   pinchtabTabRequestJson,
   probePinchtabHealth,
   getPinchtabLogTail: () => pinchtabLogTail,
+  getPinchtabAuthToken: () => pinchtabAuthToken,
+  setPinchtabAuthToken: (token) => { pinchtabAuthToken = String(token || '').trim(); },
+  isPinchtabRunning: () => Boolean(pinchtabProcess && !pinchtabProcess.killed),
 
   // Tab management
   listPinchtabTabs,
