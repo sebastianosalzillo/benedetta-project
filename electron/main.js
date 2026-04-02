@@ -129,6 +129,13 @@ const {
   executeSkill,
   listSkills,
 } = require('./skills');
+const {
+  ensurePywinautoMcpService: ccEnsurePywinautoMcpService,
+  stopPywinautoMcpService: ccStopPywinautoMcpService,
+  callPywinautoTool: ccCallPywinautoTool,
+  readPywinautoActiveWindowDetails: ccReadPywinautoActiveWindowDetails,
+  getPywinautoMcpLogTail: ccGetPywinautoMcpLogTail,
+} = require('./computer-control');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 // Constants now available from ./constants.js (C.* references)
@@ -229,9 +236,7 @@ let ttsServiceLogTail = '';
 let pinchtabProcess = null;
 let pinchtabStartupPromise = null;
 let pinchtabLogTail = '';
-let pywinautoMcpProcess = null;
-let pywinautoMcpStartupPromise = null;
-let pywinautoMcpLogTail = '';
+// pywinautoMcpProcess/pywinautoMcpStartupPromise/pywinautoMcpLogTail moved to computer-control.js (Opzione C)
 let qwenAcpStderrTail = '';
 
 let taskState = createDefaultTaskState();
@@ -2126,111 +2131,15 @@ async function findPinchtabRef(query = '', tabId = '') {
 }
 
 // ============================================================
-// Pywinauto MCP helper functions (missing from main.js)
-// ============================================================
-
-function appendPywinautoMcpLog(chunk, source) {
-  const line = `[${source}] ${String(chunk || '').trim()}`;
-  if (!line.trim()) return;
-  pywinautoMcpLogTail = `${pywinautoMcpLogTail}\n${line}`.trim().slice(-2000);
-}
-
-function getPywinautoMcpLogTail() {
-  return pywinautoMcpLogTail;
-}
-
-function hasUvBinary() {
-  try {
-    const result = require('child_process').spawnSync('uv', ['--version'], { windowsHide: true, encoding: 'utf8' });
-    return result.status === 0;
-  } catch { return false; }
-}
+// Pywinauto functions moved to computer-control.js (Opzione C)
+// Uses: ccEnsurePywinautoMcpService, ccStopPywinautoMcpService, ccCallPywinautoTool,
+//       ccReadPywinautoActiveWindowDetails, ccGetPywinautoMcpLogTail
 
 function hasGitBinary() {
   try {
     const result = require('child_process').spawnSync('git', ['--version'], { windowsHide: true, encoding: 'utf8' });
     return result.status === 0;
   } catch { return false; }
-}
-
-function getPywinautoMcpRepoDir() {
-  return path.join(app.getPath('userData'), 'pywinauto-mcp');
-}
-
-function runCommand(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const proc = require('child_process').spawn(command, args, {
-      ...options, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = ''; let stderr = '';
-    proc.stdout.on('data', (chunk) => { stdout += String(chunk || ''); });
-    proc.stderr.on('data', (chunk) => { stderr += String(chunk || ''); });
-    proc.on('error', reject);
-    proc.on('exit', (code) => { resolve({ code, stdout, stderr }); });
-  });
-}
-
-async function ensurePywinautoMcpRepo() {
-  const repoDir = getPywinautoMcpRepoDir();
-  if (fs.existsSync(path.join(repoDir, '.git'))) return repoDir;
-  if (!hasGitBinary()) throw new Error('git not found');
-  fs.mkdirSync(repoDir, { recursive: true });
-  const { code } = await runCommand('git', ['clone', PYWINAUTO_MCP_REPO_URL, '.'], { cwd: repoDir });
-  if (code !== 0) throw new Error(`git clone failed with code ${code}`);
-  return repoDir;
-}
-
-function pywinautoMcpHealth() {
-  return fetch(`${PYWINAUTO_MCP_URL}/health`).then((r) => r.ok).catch(() => false);
-}
-
-function stopPywinautoMcpService() {
-  if (!pywinautoMcpProcess) return;
-  try { pywinautoMcpProcess.kill('SIGTERM'); } catch { /* ignore */ }
-  pywinautoMcpProcess = null;
-}
-
-async function ensurePywinautoMcpService() {
-  if (await pywinautoMcpHealth()) return true;
-  if (pywinautoMcpStartupPromise) return pywinautoMcpStartupPromise;
-  pywinautoMcpStartupPromise = (async () => {
-    if (!hasUvBinary()) throw new Error('uv not found');
-    const repoDir = await ensurePywinautoMcpRepo();
-    pywinautoMcpLogTail = '';
-    if (pywinautoMcpProcess) stopPywinautoMcpService();
-    pywinautoMcpProcess = require('child_process').spawn('uv', ['run', 'uvicorn', 'server:app', '--host', PYWINAUTO_MCP_HOST, '--port', String(PYWINAUTO_MCP_PORT)], {
-      cwd: repoDir, windowsHide: true, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    pywinautoMcpProcess.stdout.on('data', (chunk) => appendPywinautoMcpLog(chunk, 'stdout'));
-    pywinautoMcpProcess.stderr.on('data', (chunk) => appendPywinautoMcpLog(chunk, 'stderr'));
-    pywinautoMcpProcess.on('exit', (code, signal) => {
-      appendPywinautoMcpLog(`process exited code=${code} signal=${signal}`, 'exit');
-      pywinautoMcpProcess = null;
-    });
-    pywinautoMcpProcess.on('error', (error) => appendPywinautoMcpLog(error.message, 'spawn-error'));
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < PYWINAUTO_MCP_STARTUP_TIMEOUT_MS) {
-      if (await pywinautoMcpHealth()) return true;
-      if (!pywinautoMcpProcess) throw new Error(`pywinauto-mcp exited before becoming ready.\n${pywinautoMcpLogTail}`);
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    throw new Error(`pywinauto-mcp startup timeout.\n${pywinautoMcpLogTail}`);
-  })();
-  try { return await pywinautoMcpStartupPromise; } finally { pywinautoMcpStartupPromise = null; }
-}
-
-async function callPywinautoTool(name, arguments = {}) {
-  await ensurePywinautoMcpService();
-  const response = await fetch(`${PYWINAUTO_MCP_URL}/tools/call`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, arguments }),
-  });
-  if (!response.ok) throw new Error(`pywinauto-mcp call failed: ${response.status}`);
-  return response.json();
-}
-
-async function readPywinautoActiveWindowDetails(title = '') {
-  const result = await callPywinautoTool('get_active_window_details', title ? { title_contains: title } : {});
-  return result?.content?.[0]?.text || '';
 }
 
 function appendHistoryMessage(message) {
@@ -2859,7 +2768,7 @@ async function readPywinautoDesktopStateText(preferredState = computerState) {
     };
 
     if (windowTitle && !details.interactiveElements.length) {
-      details = await readPywinautoActiveWindowDetails(windowTitle);
+      details = await ccReadPywinautoActiveWindowDetails(windowTitle);
     }
 
     const focusedText = buildPywinautoForegroundText(windowTitle, details.interactiveElements);
@@ -4072,7 +3981,7 @@ async function refreshComputerState() {
     const primaryDisplay = screen.getPrimaryDisplay();
     const cursor = screen.getCursorScreenPoint();
     const state = await runPowerShellJson(buildComputerWindowsStateScript(12));
-    const pywinautoDetails = await readPywinautoActiveWindowDetails(String(state?.foregroundTitle || '').trim());
+    const pywinautoDetails = await ccReadPywinautoActiveWindowDetails(String(state?.foregroundTitle || '').trim());
     updateComputerState({
       supported: true,
       width: Number(primaryDisplay?.size?.width || 0),
@@ -4440,14 +4349,14 @@ async function performComputerAction(payload = {}) {
 
     if (titleContains) {
       try {
-        const lookup = await callPywinautoTool('automation_windows', {
+        const lookup = await ccCallPywinautoTool('automation_windows', {
           operation: 'find',
           title: titleContains,
         });
         const candidates = Array.isArray(lookup?.windows) ? lookup.windows : [];
         const focused = candidates.find((item) => Number.isFinite(Number(item?.handle)));
         if (focused?.handle) {
-          const focusResult = await callPywinautoTool('automation_windows', {
+          const focusResult = await ccCallPywinautoTool('automation_windows', {
             operation: 'focus',
             handle: Number(focused.handle),
           });
@@ -4591,7 +4500,7 @@ if ($durationMs -gt 0) {
         const operation = button === 'right'
           ? 'right_click'
           : (clicks > 1 ? 'double_click' : 'click');
-        const result = await callPywinautoTool('automation_elements', {
+        const result = await ccCallPywinautoTool('automation_elements', {
           operation,
           window_handle: foregroundHandle,
           control_id: controlId,
@@ -4692,7 +4601,7 @@ ${hasCoords ? `[void][NyxComputerWin32]::SetCursorPos(${x}, ${y})` : ''}
     const foregroundHandle = Number(computerState.foregroundHandle || 0);
     if (controlId !== undefined && controlId !== null && Number.isFinite(foregroundHandle) && foregroundHandle > 0) {
       try {
-        const result = await callPywinautoTool('automation_elements', {
+        const result = await ccCallPywinautoTool('automation_elements', {
           operation: 'set_text',
           window_handle: foregroundHandle,
           control_id: controlId,
@@ -7215,7 +7124,7 @@ function cleanupRuntime() {
 
   stopTtsService();
   stopPinchtabService();
-  stopPywinautoMcpService();
+  ccStopPywinautoMcpService();
   stopQwenAcpRuntime();
   resetBrainRuntimeState();
 
