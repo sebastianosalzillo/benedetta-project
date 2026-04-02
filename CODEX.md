@@ -422,13 +422,13 @@ Portare il runtime a **`model-planned agent with server execution`**:
 ## Current Status
 
 - **Stato:** In progress
-- **Area di lavoro attiva:** `electron/main.js`, `browser-agent.js`, `window-manager.js`
+- **Area di lavoro attiva:** `electron/main.js`, `window-manager.js`
 - **Ultima build verificata:** `npm run build` passata il 2026-04-02
-- **Task in esecuzione:** Cleanup duplicati browser-agent (agent: opencode/mimo-v2-pro-free)
-- **Ultima task completata:** computer-control.js migrato (T003b, commit `d60234e`), T002 junk file rimosso
-- **Blocco corrente:** T003a/T003c bloccati — 29 funzioni duplicate browser-agent + 15 funzioni window-manager restano in main.js. Alias creati per compatibilita'. Rimozione completa richiede editing chirurgico.
-- **Decisione architetturale:** ADR-002 — Incapsulamento Completo (già approvata)
-- **Prossima azione:** Rimuovere 29 funzioni duplicate browser-agent da main.js (usando alias esistenti come ponte)
+- **Task in esecuzione:** T004c refactor stato globale finestre (agent: opencode/mimo-v2-pro-free)
+- **Ultima task completata:** T004b — rimosse ~378 righe duplicate browser-agent da main.js (commit pending)
+- **Blocco corrente:** T004c — 93 reference sites finestre in main.js, factory pura non fattibile per cross-deps (createChatWindow→avatarWindow). Approccio getter/setter + lazy registration.
+- **Decisione architetturale:** ADR-002 (Incapsulamento Completo), ADR-003 (Sblocco T003a/T003c) — entrambe approvate
+- **Prossima azione:** Implementare getter/setter finestre in window-manager.js, poi swap reference sites in main.js in batch da 20
 
 ---
 
@@ -579,14 +579,16 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | Bloccato T003a/T003c, aggiunti T004b/T004c | Service functions accoppiate a helper main.js-specifici, commit `cddb148` |
 | 2026-04-02 | Kilo (Architect) | ADR-003 — Sblocco T003a/T003c | Rimozione duplicati browser-agent + factory window-manager |
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T002 junk rimosso, T004b partial (18 alias browser-agent), CODEX allineato | Commit `2ac277e`, build verde |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T004b completato: ~378 righe duplicate browser-agent rimosse da main.js | Build verde, dead code eliminato (helpers + service functions). T004c iniziato |
 
 ---
 
 *Ultimo aggiornamento: 2026-04-02*
-*Prossima azione: **Costruttore** esegue T004b (rimuovere ~270 righe duplicate da main.js, importare da browser-agent.js) poi T004c (refactor window-manager factory) — vedi TASK.md*
+*Prossima azione: **Costruttore** esegue T004c (getter/setter finestre in window-manager.js + swap 93 reference sites in main.js) — vedi TASK.md*
 *Ruoli disponibili: Ricercatore, Revisore, Costruttore, Architect, QA/Tester, Documenter, UI Specialist (7 attivi)*
 *Ruoli futuri: Security Specialist, DevOps/Release Manager (da attivare in Phase 7)*
-*Task pronte: T004b, T004c (Ready) — T003a/b/c bloccati o completati*
+*Task pronte: T004c (In Progress) — T003a/b/c bloccati o completati*
+*Task completate: T004b ✅*
 *Decisioni approvate: ADR-001 (struttura file), ADR-002 (incapsulamento moduli), ADR-003 (sblocco T003a/T003c)*
 *Review complete: PROPOSTE.md #001 (2/2 revisori)*
 *Fasi: Phase 0-6 completate, Phase 7 (packaging) in inizio*

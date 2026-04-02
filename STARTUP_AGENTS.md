@@ -25,6 +25,266 @@
 
 ---
 
+## Guida Git per Tutti gli Agenti
+
+### Inizializzazione Progetto (Primo Setup)
+
+```bash
+# 1. Inizializza repository (solo una volta, Orchestratore o Architect)
+git init
+
+# 2. Crea .gitignore (Architect o Costruttore)
+# Aggiungi: node_modules/, dist/, .env, *.log, __pycache__/, .pinchtab-profile/
+
+# 3. Primo commit (tutti i file iniziali)
+git add .
+git commit -m "Initial commit: progetto startup con struttura multi-agente"
+
+# 4. Crea branch main/master
+git branch -M main
+
+# 5. Aggiungi remote (se usi GitHub/GitLab)
+git remote add origin https://github.com/tuo-user/tuo-repo.git
+
+# 6. Push iniziale
+git push -u origin main
+```
+
+---
+
+### Workflow Git Giornaliero (Per Tutti gli Agenti)
+
+```bash
+# PRIMA DI INIZIARE LAVORO (ogni mattina)
+git status                    # Verifica stato repository
+git pull origin main          # Allinea con ultimo stato (se team multi-user)
+git branch                    # Verifica branch corrente
+
+# DURANTE LAVORO (dopo ogni task completata)
+git add <file-modificati>     # Aggiungi file specifici
+# OPPURE
+git add .                     # Aggiungi tutti i file modificati
+
+git commit -m "<tipo>: <descrizione> (<task-id>)"
+# Esempi:
+# git commit -m "feat: implementa componente Canvas (T007)"
+# git commit -m "fix: risolve memory leak in browser-agent (T003a)"
+# git commit -m "docs: aggiorna CODEX.md con stato migrazione"
+# git commit -m "refactor: incapsula pinchtabProcess in modulo (T003a)"
+# git commit -m "test: aggiungi smoke test per ACP (T004)"
+
+# DOPO COMMIT
+git status                    # Verifica commit riuscito
+git log -n 3                  # Verifica ultimi commit
+
+# FINE GIORNATA
+git push origin main          # Condividi cambiamenti con team
+```
+
+---
+
+### Convenzioni Messaggi Commit
+
+**Formato:** `<tipo>: <descrizione> (<task-id>)`
+
+**Tipi:**
+- `feat`: Nuova feature o funzionalità
+- `fix`: Bug fix
+- `docs`: Documentazione (CODEX.md, TASK.md, etc.)
+- `style`: Formattazione, spazi, punti e virgola (nessun cambio logica)
+- `refactor`: Refactoring codice (senza cambio funzionalità)
+- `test`: Aggiunta test o correzione test esistenti
+- `chore`: Build process, dipendenze, configurazione (nessun cambio codice)
+
+**Esempi Validi:**
+```
+feat: aggiungi structured data JSON-LD per SEO (T012)
+fix: previeni crash se Kokoro non risponde (T005)
+docs: aggiorna STARTUP_AGENTS.md con prompt Architect
+refactor: estrai window-manager da main.js (T003c)
+test: aggiungi unit test per buildToolResultPrompt
+chore: aggiorna dipendenze React 18 → 19
+style: formatta codice con prettier
+```
+
+---
+
+### Git per Ruolo Specifico
+
+#### Architect Agent
+```bash
+# Dopo aver scritto ADR in DECISIONI.md
+git add DECISIONI.md
+git commit -m "docs: aggiungi ADR-003 per migrazione moduli"
+
+# Dopo aver aggiornato CODEX.md con decisioni
+git add CODEX.md
+git commit -m "docs: aggiorna architettura in CODEX.md"
+```
+
+#### SEO + Project Manager Agent
+```bash
+# Dopo aver aggiornato TASK.md con stato task
+git add TASK.md
+git commit -m "chore: aggiorna stato task T003a/b/c"
+
+# Dopo aver pubblicato articoli blog o ottimizzazioni SEO
+git add ROADMAP_SEO.md src/pages/blog/*.mdx
+git commit -m "feat: pubblica articolo 'Assistente AI Italiano' (SEO-001)"
+```
+
+#### Backend/Frontend/Full-stack Builder Agent
+```bash
+# Dopo aver implementato feature
+git add electron/*.js src/components/*.jsx
+git commit -m "feat: implementa live canvas con video/audio support (T007)"
+
+# Dopo fix bug
+git add electron/main.js
+git commit -m "fix: previeni race condition in agentLoop (T004)"
+
+# Dopo refactoring moduli
+git add electron/browser-agent.js electron/main.js
+git commit -m "refactor: incapsula pinchtabProcess in browser-agent (T003a)"
+```
+
+#### Revisore + QA/Tester Agent
+```bash
+# Dopo aver compilato review in REVIEW.md
+git add REVIEW.md
+git commit -m "docs: aggiungi review per T003a (Changes Required)"
+
+# Dopo test e bug report
+git add TASK.md
+git commit -m "test: report QA per T007, 2 bug minori trovati"
+```
+
+#### Documenter + Ricercatore Agent
+```bash
+# Dopo ricerca completata
+git add RICERCA.md
+git commit -m "docs: ricerca Kokoro vs VibeVoice benchmark"
+
+# Dopo documentazione aggiornata
+git add design-system.md README.md
+git commit -m "docs: aggiorna design-system con componente Button"
+```
+
+#### Product Manager Agent
+```bash
+# Dopo aver priorizzato backlog
+git add TASK.md
+git commit -m "chore: priorizza backlog Q2, 3 feature high-priority"
+
+# Dopo PRD scritto
+git add PROPOSTE.md
+git commit -m "docs: PRD per feature 'Export Sessioni' (PROP-005)"
+```
+
+#### UI Specialist Agent
+```bash
+# Dopo design system aggiornato
+git add design-system.md
+git commit -m "docs: aggiungi palette colori dark mode"
+
+# Dopo mockup o prototipi
+git add public/mockup/*.fig src/components/ui/*.jsx
+git commit -m "feat: implementa componente Modal accessibile (UI-003)"
+```
+
+#### Orchestratore Agent
+```bash
+# Dopo report giornaliero
+git add CODEX.md
+git commit -m "chore: report giornaliero 2026-04-02, 8 task completate"
+
+# Dopo onboarding nuovo agente
+git add STARTUP_AGENTS.md
+git commit -m "docs: onboarding architect-agent al team"
+```
+
+---
+
+### Branch Strategy per Feature
+
+```bash
+# Per feature grandi (più di 1 giorno di lavoro)
+git checkout -b feature/<nome-feature>-<data>
+# Esempio: git checkout -b feature/live-canvas-0402
+
+# Lavora sulla feature, commit frequenti
+git add .
+git commit -m "feat: implementa base canvas window"
+git commit -m "feat: aggiungi supporto image content type"
+git commit -m "feat: aggiungi supporto video content type"
+
+# Prima di merge su main
+git checkout main
+git pull origin main
+git checkout feature/live-canvas-0402
+git rebase main                     # Allinea con main
+
+# Dopo review approvata
+git checkout main
+git merge feature/live-canvas-0402  # Merge feature
+git push origin main                # Push a main
+git branch -d feature/live-canvas-0402  # Cancella branch locale
+```
+
+---
+
+### Risoluzione Conflitti Git
+
+```bash
+# Se git pull riporta conflitti
+git status                        # Vedi file in conflitto
+
+# Apri file, cerca marcatori conflitto
+# <<<<<<< HEAD
+# Tuo codice
+# =======
+# Codice altrui
+# >>>>>>> origin/main
+
+# Risolvi conflitto manualmente, poi:
+git add <file-risolto>
+git commit -m "fix: risolvi conflitto in main.js"
+git push origin main
+```
+
+---
+
+### Comandi Git Utili per Ogni Agente
+
+```bash
+# Vedi storico modifiche file
+git log --oneline <file>
+
+# Vedi differenze non committate
+git diff
+
+# Vedi differenze committate (ultimi 3 commit)
+git diff HEAD~3
+
+# Annulla modifiche non committate
+git checkout -- <file>
+
+# Stash cambiamenti temporanei
+git stash
+git stash pop
+
+# Vedi chi ha modificato riga specifica
+git blame -L <start>,<end> <file>
+
+# Cerca testo in tutti i commit
+git log --all --grep="<testo>"
+
+# Vedi stato dettagliato
+git status -v
+```
+
+---
+
 ## File MD Condivisi
 
 | File | Scopo | Aggiornato da | Letto da |
@@ -101,6 +361,23 @@ Sei un agente AI che ricopre il ruolo di Architect per una startup tech.
 - Risoluzione conflitti tra agenti
 - Standard tecnici definiti e documentati
 
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo aver scritto ADR
+git add DECISIONI.md
+git commit -m "docs: aggiungi ADR-<N> per <argomento>"
+
+# Dopo aggiornamento CODEX.md
+git add CODEX.md
+git commit -m "docs: aggiorna architettura in CODEX.md"
+
+# Sera: push cambiamenti
+git push origin main
+```
+
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → PM: Allinea visione tecnica con roadmap product
 - → Revisore: Supporta review architetturali complesse
@@ -171,6 +448,27 @@ Sei un agente AI che ricopre il ruolo combinato di SEO Specialist e Project Mana
 - 2-3 articoli blog pubblicati/settimana
 - Keyword ranking migliorano (monitora con tool)
 
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo aggiornamento TASK.md (task completate/blocker)
+git add TASK.md
+git commit -m "chore: aggiorna stato task e rimuovi blocker"
+
+# Dopo aggiornamento ROADMAP_SEO.md
+git add ROADMAP_SEO.md
+git commit -m "docs: aggiorna piano SEO settimana <N>"
+
+# Dopo articoli blog pubblicati
+git add src/pages/blog/*.mdx
+git commit -m "feat: pubblica articolo '<titolo>' (SEO-<N>)"
+
+# Sera: push cambiamenti
+git push origin main
+```
+
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → PM Agent: Coordina priorità feature vs SEO
 - → Frontend Builder: Assegna task ottimizzazione UI (meta tag, structured data)
@@ -237,6 +535,30 @@ Sei un agente AI che ricopre il ruolo di Backend Costruttore per una startup tec
 - Commit con messaggio chiaro (es. "Migrare browser-agent (T003a)")
 - TASK.md aggiornato con stato e commit link
 - Build verde (`npm run build` passa)
+
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo implementazione feature
+git add electron/*.js
+git commit -m "feat: implementa <feature> (T<task-id>)"
+
+# Dopo fix bug
+git add electron/*.js
+git commit -m "fix: <descrizione fix> (T<task-id>)"
+
+# Dopo refactoring moduli
+git add electron/*.js
+git commit -m "refactor: <descrizione refactor> (T<task-id>)"
+
+# Dopo build verificata
+git status  # Verifica nessun file temporaneo
+
+# Sera: push cambiamenti
+git push origin main
+```
 
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → Revisore+QA: Applica fix richiesti in REVIEW.md
@@ -307,6 +629,30 @@ Sei un agente AI che ricopre il ruolo di Frontend Costruttore per una startup te
 - Build verde (`npm run build` passa)
 - Lighthouse score ≥90 per SEO e accessibilità
 
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo implementazione feature React
+git add src/components/*.jsx src/pages/*.jsx
+git commit -m "feat: implementa <componente> (T<task-id>)"
+
+# Dopo ottimizzazioni SEO
+git add src/pages/*.jsx public/*.html
+git commit -m "feat: ottimizza SEO <pagina> (T<task-id>)"
+
+# Dopo fix bug UI
+git add src/components/*.jsx
+git commit -m "fix: <descrizione fix> (T<task-id>)"
+
+# Dopo build verificata
+git status  # Verifica nessun file temporaneo
+
+# Sera: push cambiamenti
+git push origin main
+```
+
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → UI Specialist: Implementa design system, chiedi chiarimenti
 - → SEO+PM: Implementa ottimizzazioni SEO on-page
@@ -373,6 +719,26 @@ Sei un agente AI che ricopre il ruolo di Full-stack Costruttore per una startup 
 - TASK.md aggiornato con stato e commit link
 - Build verde (`npm run build` passa)
 - IPC security verificato (contextIsolation, sandbox)
+
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo implementazione feature IPC/cross-layer
+git add electron/*.js src/*.jsx
+git commit -m "feat: implementa <feature IPC> (T<task-id>)"
+
+# Dopo fix bug
+git add electron/*.js src/*.jsx
+git commit -m "fix: <descrizione fix> (T<task-id>)"
+
+# Dopo build verificata
+git status  # Verifica nessun file temporaneo
+
+# Sera: push cambiamenti
+git push origin main
+```
 
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → Backend Builder: Coordina main process e servizi
@@ -450,6 +816,26 @@ Sei un agente AI che ricopre il ruolo combinato di Revisore (code review) e QA/T
 - Build verde verificata
 - Bug documentati con riproducibilità
 
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo code review completata
+git add REVIEW.md
+git commit -m "docs: review per T<task-id> (<verdict>)"
+
+# Dopo bug report
+git add TASK.md
+git commit -m "test: report QA per T<task-id>, <N> bug trovati"
+
+# Dopo build verificata
+git status  # Verifica nessun file temporaneo
+
+# Sera: push cambiamenti
+git push origin main
+```
+
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → Costruttori (Backend, Frontend, Full-stack): Review codice, richiedi fix
 - → PM: Segnala task pronte per merge, bug critici
@@ -518,6 +904,23 @@ Sei un agente AI che ricopre il ruolo combinato di Documenter e Ricercatore per 
 - Diagrammi o esempi quando utili
 - Task per discrepanze identificate
 
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo ricerca completata
+git add RICERCA.md
+git commit -m "docs: ricerca <argomento> con benchmark e raccomandazioni"
+
+# Dopo documentazione aggiornata
+git add CODEX.md README.md design-system.md
+git commit -m "docs: aggiorna <file> per <feature>"
+
+# Sera: push cambiamenti
+git push origin main
+```
+
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → PM: Fornisci ricerca per decisioni product
 - → Costruttori: Documenta API e feature nuove
@@ -579,6 +982,27 @@ Sei un agente AI che ricopre il ruolo di Product Manager per una startup tech.
 - Backlog priorizzato in TASK.md
 - Metriche di successo definite (KPI)
 - Report product settimanale
+
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo priorizzazione backlog
+git add TASK.md
+git commit -m "chore: priorizza backlog, <N> task high-priority"
+
+# Dopo PRD scritto
+git add PROPOSTE.md
+git commit -m "docs: PRD per feature '<nome>' (PROP-<N>)"
+
+# Dopo report product
+git add CODEX.md
+git commit -m "docs: report product settimana <N>"
+
+# Sera: push cambiamenti
+git push origin main
+```
 
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → SEO+PM: Coordina priorità feature vs SEO
@@ -649,6 +1073,27 @@ Sei un agente AI che ricopre il ruolo di UI Specialist per una startup tech.
 - Pattern UI riutilizzabili documentati
 - Mockup/prototipi per nuove feature
 
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo design system aggiornato
+git add design-system.md
+git commit -m "docs: aggiungi <componente> a design system"
+
+# Dopo audit accessibilità
+git add TASK.md
+git commit -m "test: audit accessibilità, score <N>"
+
+# Dopo mockup/prototipi
+git add public/mockup/* src/components/ui/*
+git commit -m "feat: prototipo UI per <feature>"
+
+# Sera: push cambiamenti
+git push origin main
+```
+
 **INTEGRAZIONE CON ALTRI RUOLI:**
 - → Frontend Builder: Fornisci specifiche UI, coordina implementazione
 - → Revisore+QA: Review accessibilità e usabilità
@@ -709,6 +1154,27 @@ Sei un agente AI che ricopre il ruolo di Orchestratore per un team di 8 agenti A
 - Handoff fluidi tra ruoli
 - Report stato team giornaliero
 - Metriche team (velocity, blocker risolti, task completate)
+
+**GIT WORKFLOW:**
+```bash
+# Mattina: allinea repository
+git pull origin main
+
+# Dopo report giornaliero
+git add CODEX.md
+git commit -m "chore: report giornaliero <data>, <N> task completate"
+
+# Dopo onboarding nuovo agente
+git add STARTUP_AGENTS.md
+git commit -m "docs: onboarding <ruolo>-agent al team"
+
+# Dopo risoluzione conflitti
+git add TASK.md REVIEW.md
+git commit -m "chore: risolvi conflitto <task-id>, <descrizione>"
+
+# Sera: push cambiamenti
+git push origin main
+```
 
 **INTEGRAZIONE CON TUTTI I RUOLI:**
 - → Tutti: Verifica lettura CODEX.md, coordina handoff
