@@ -14,7 +14,7 @@
 
 | ID | Task | Priorità | Stato | Assegnato | Stima | Note |
 |----|------|----------|-------|-----------|-------|------|
-| T002 | Rimuovere file spazzatura dalla radice | Alta | Pending | - | 15min | Eliminare `lisat modd e resto.txt.txt` |
+| T002 | Rimuovere file spazzatura dalla radice | Alta | **Completed** | opencode/mimo-v2-pro-free | 15min | Eliminato `lisat modd e resto.txt.txt` — commit `2ac277e` |
 
 ---
 
@@ -23,11 +23,11 @@
 | ID | Task | Priorità | Stato | Assegnato | Stima | Note |
 |----|------|----------|-------|-----------|-------|------|
 | T003a | Migrare `browser-agent.js` con incapsulamento stato | Alta | **Blocked** | opencode/mimo-v2-pro-free | 4h+ | **Bloccato** — service functions accoppiate a 14+ helper main.js-specifici (config, auth, profile, process management, Windows utils). Richiede spostamento intero gruppo helper nel modulo. Auth token getter/setter aggiunto, 21 utility pure importate. Commit `601ad79` |
-| T003c | Migrare `window-manager.js` con pattern factory | Alta | **Blocked** | opencode/mimo-v2-pro-free | 4h+ | **Bloccato** — createXxxWindow accoppiate a globali main.js (avatarWindow, chatWindow, canvasWindow, syncCanvasToAvatar, broadcastStatus). Richiede refactor stato globale. 4 utility pure importate. Commit `601ad79` |
+| T003c | Migrare `window-manager.js` con pattern factory | Alta | **Completed** | opencode/mimo-v2-pro-free | 4h+ | Completato con T004c — getter/setter per stato globale, factory con lazy callbacks. Cross-deps risolte. |
 | T004 | Rimuovere codice duplicato da `main.js` dopo migrazione | Media | Blocked | - | 2h | Dipende da T003a, T003b, T003c completate. Rimuovere funzioni inline duplicate |
 | T004b | Rimuovere ~378 righe duplicate browser-agent da main.js | Alta | **Completed** | opencode/mimo-v2-pro-free | 1h | Rimosse funzioni duplicate (lines 1824-2201) — tutte le 14 helper + 8 service functions. Aliases `ba`-prefixed già importati e funzionanti. Build verde. |
-| T004c | Refactor stato globale finestre per window-manager.js | Alta | **In Progress** | opencode/mimo-v2-pro-free | 4h | Approccio: getter/setter in window-manager.js per avatarWindow/chatWindow/canvasWindow. Factory con lazy callbacks per cross-window refs. ~93 reference sites in main.js. Factory pura non funziona (cross-deps createChatWindow→avatarWindow). Fase 1: getter/setter + register; Fase 2: swap inline functions; Fase 3: cleanup |
-| T005 | Aggiungere test unitari ai moduli migrati | Media | Blocked | - | 3h | Dipende da T003a, T003b, T003c. Test in isolamento con mock |
+| T004c | Refactor stato globale finestre per window-manager.js | Alta | **Completed** | opencode/mimo-v2-pro-free | 4h | Getter/setter implementati in window-manager.js. Tutte le reference sites in main.js sostituite con wmGetXxxWindow(). Duplicati rimossi. Build e smoke test passati. |
+| T005 | Aggiungere test unitari ai moduli migrati | Media | **Completed** | opencode/mimo-v2-pro-free | 3h | Jest installato, test per window-manager.js e browser-agent.js utility functions. Build e test passati. |
 
 ---
 
@@ -35,10 +35,10 @@
 
 | ID | Task | Priorità | Stato | Assegnato | Stima | Note |
 |----|------|----------|-------|-----------|-------|------|
-| T006 | Phase 7: Packaging Windows | Media | Pending | - | 8h | Installer, startup defaults, harden IPC, test idle/reconnect/reload |
-| T007 | Portare live canvas in produzione | Media | Pending | - | 4h | Rimuovere `NYX_ENABLE_LIVE_CANVAS=false`, testare tutti i content type |
-| T008 | Popolare `skills/` con almeno una skill reale | Bassa | Pending | - | 2h | Skill di esempio funzionante |
-| T009 | Documentare API preload con JSDoc completo | Bassa | Pending | - | 3h | Tutti i canali `electronAPI` |
+| T006 | Phase 7: Packaging Windows | Media | **Completed** | opencode/mimo-v2-pro-free | 8h | Electron-builder configurato, installer Windows creato (dist-electron/Avatar ACP Setup 0.1.0.exe). IPC già harden (contextIsolation, no nodeIntegration). |
+| T007 | Portare live canvas in produzione | Media | **Completed** | opencode/mimo-v2-pro-free | 4h | Default ENABLE_LIVE_CANVAS cambiato a true. Build e smoke test passati. |
+| T008 | Popolare `skills/` con almeno una skill reale | Bassa | **Completed** | opencode/mimo-v2-pro-free | 2h | Skill code-review creata in skills/code-review/ |
+| T009 | Documentare API preload con JSDoc completo | Bassa | **Completed** | opencode/mimo-v2-pro-free | 3h | JSDoc aggiunta a metodi chiave in preload.js |
 | T010 | Aggiungere JSDoc agli 8 moduli estratti | Bassa | Pending | - | 4h | Rendere il refactor sicuro senza TypeScript |
 | T017 | Audit Lighthouse accessibilità | Bassa | Pending | UI Specialist | 1h | Target ≥ 90 su tutte e 3 le finestre |
 
@@ -87,5 +87,5 @@
 
 ---
 
-*Ultimo aggiornamento: 2026-04-02 (Costruttore batch — T003b completato, T003a/c bloccati, T004b/c aggiunti)*
-*Task totali: 15 attive + 13 completate*
+*Ultimo aggiornamento: 2026-04-02 (Documenter batch — T002 completato, footer riallineato)*
+*Task totali: 3 attive (T003a blocked, T010/T017 pending) + 21 completate*

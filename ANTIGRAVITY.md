@@ -324,7 +324,7 @@ Le risposte vengono scritte nei file workspace tramite token `WORKSPACE`.
 | `KOKORO_DEFAULT_SPEAKER` | `if_sara` | Voce Kokoro |
 | `PINCHTAB_HOST` | `127.0.0.1` | Host browser agent |
 | `PINCHTAB_PORT` | `9867` | Porta browser agent |
-| `NYX_ENABLE_LIVE_CANVAS` | `false` | Canvas live (disabilitato) |
+| `NYX_ENABLE_LIVE_CANVAS` | `true` | Canvas live (abilitato in produzione) |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Host Ollama |
 | `NYX_OLLAMA_MODEL` | `qwen3.5:0.8b` | Modello Ollama |
 
@@ -334,21 +334,22 @@ Le risposte vengono scritte nei file workspace tramite token `WORKSPACE`.
 
 ### 🔴 Critici
 
-#### main.js ancora monolotico
+#### main.js ancora monolitico
 - 9 243 righe in un singolo file
-- I moduli estratti sono importati ma in main.js rimane **codice duplicato legacy** per backward compatibility
-- `isLikelyBrowserAutopilotTask()` è ancora presente ma inutilizzata
+- ~378 righe duplicate browser-agent rimosse (T004b, commit `8e89479`)
+- Service functions browser-agent restano in main.js (T003a blocked)
 - **Rischio:** impossibile mantenere/testare unitariamente le parti core senza refactor completo
 
-#### Doppia implementazione ACP runtime
-- `acp-runtime.js` esporta `QwenAcpRuntime` (classe moderna, pulita)
-- `main.js` contiene ancora `qwenAcpRuntime` object + `ensureQwenAcpRuntime()` + `qwenAcpSendRequest()` inline
-- **Rischio:** divergenza comportamentale, bug difficili da tracciare
+#### Migrazione moduli quasi completata
+- `computer-control.js`: ✅ migrato
+- `window-manager.js`: ✅ migrato con factory pattern (T004c)
+- `browser-agent.js`: ⚠️ utility migrate, service functions restano in main.js (T003a blocked)
+- **Rischio:** divergenza comportamentale se le service functions inline non vengono consolidate
 
-#### Nessun test automatico
-- `npm run build` è l'unico gate di qualità
-- Zero test unitari, zero integration test
-- **Rischio:** regressioni silenti
+#### Test unitari aggiunti
+- Jest installato con test per window-manager.js e browser-agent.js (T005)
+- Build e test passano
+- **Nota:** Review #002 segnala regressione nel path `openCanvas()` non coperta dai test
 
 ### 🟡 Medi
 
@@ -357,10 +358,10 @@ Le risposte vengono scritte nei file workspace tramite token `WORKSPACE`.
 - Richiede patch chirurgiche per non introdurre nuovi bug
 - **Impatto:** rallenta il refactor del browser-loop
 
-#### Canvas live disabled
-- `NYX_ENABLE_LIVE_CANVAS=false` hardcoded nella path attiva
-- La feature esiste nel codice ma non è raggiungibile
-- **Impatto:** funzionalità non testabile senza modifica esplicita
+#### Canvas live abilitato
+- `NYX_ENABLE_LIVE_CANVAS=true` di default (T007)
+- Feature raggiungibile e attiva in produzione
+- **Impatto:** funzionalità canvas disponibile senza flag esplicito
 
 #### Ollama non supporta session resume
 - `supportsSessionResume: false` nella config
@@ -374,7 +375,7 @@ Le risposte vengono scritte nei file workspace tramite token `WORKSPACE`.
 
 ### 🟢 Minori / Da monitorare
 
-- `skills/` è vuota al momento (directory presente ma nessun file)
+- `skills/` contiene skill code-review (T008 completato)
 - `.pinchtab-profile/` presente ma non documentato esplicitamente
 - `test_acp.js` nella radice: script di test standalone, non integrato in npm scripts
 - `lisat modd e resto.txt.txt`: file di testo nella radice (probabilmente appunti temporanei, da rimuovere)
@@ -431,24 +432,22 @@ canvas-state      → sync stato canvas
 
 ### Immediato (da bloccare)
 
-1. **Rimuovere `isLikelyBrowserAutopilotTask()`** da main.js (legacy, inutilizzata)
-2. **Migrare da `qwenAcpRuntime` inline a `QwenAcpRuntime` class** — eliminare la doppia implementazione
-3. **Misurare latenza Kokoro in-app** dopo warmup e tuning startup
+1. **Completare migrazione browser-agent service functions** — T003a (blocked, richiede spostamento helper da main.js)
+2. **Fix regressione openCanvas()** — Review #002 I1: rileggere reference dopo ensureWindows()
+3. **Estendere test al path creazione canvas** — Review #002 I2
 
 ### Breve termine
 
-4. **Completare la migrazione degli 8 moduli** — sostituire call inline con import
-5. **Avviare transizione JSON tool-use** (come da IMPLEMENTATION_PLAN.md)
-6. **Aggiungere almeno un smoke test** — es. `test_acp.js` integrato in `npm test`
-7. **Rimuovere file spazzatura** dalla radice (`lisat modd e resto.txt.txt`)
-8. **Aggiungere `.gitignore`** con regole per `__pycache__`, `node_modules`, `dist`, `*.log`
+4. **Eliminare reference stale nella persistenza finestre** — Review #002 I3
+5. **Consolidare confine window-manager** — Review #002 M1: rinominare utility non usate
+6. **Aggiungere JSDoc agli 8 moduli estratti** — T010
+7. **Audit Lighthouse accessibilità** — T017
 
 ### Medio termine
 
-9. **Phase 7** — packaging Windows, installer, startup defaults, harden IPC
-10. **Portare il live canvas in produzione** (rimuovere il flag hardcoded)
-11. **Popolare `skills/`** con skill reali
-12. **Documentare la API preload** con JSDoc completo
+8. **Phase 7 completamento** — packaging Windows, installer, startup defaults, harden IPC
+9. **Popolare `skills/`** con skill reali (T008 — completato, espandere)
+10. **Documentare la API preload** con JSDoc completo (T009 — completato)
 
 ### Lungo termine
 
@@ -464,7 +463,7 @@ canvas-state      → sync stato canvas
 | Metrica | Valore |
 |---------|--------|
 | Linee totali (electron/) | ~170 000 |
-| Moduli estratti da main.js | 8/∞ |
+| Moduli estratti da main.js | 22 (20 completati, 2 parziali) |
 | Dipendenze runtime | 5 (concurrently, cross-env, framer-motion, react, react-dom) |
 | Dipendenze dev | 3 (@vitejs/plugin-react, electron, vite) |
 | Tool brain disponibili | ~20 |
@@ -474,8 +473,8 @@ canvas-state      → sync stato canvas
 | Gesti | 8 |
 | Canali IPC | ~25 |
 | Variabili d'ambiente | 9 |
-| File documentazione | 6 |
-| Test automatici | 0 |
+| File documentazione | 12 |
+| Test automatici | 2 suite Jest, 16 test (T005) |
 | Build status | ✅ Verde |
 
 ---
@@ -484,13 +483,14 @@ canvas-state      → sync stato canvas
 
 Il progetto è **funzionante e ambizioso**, con un'architettura che ha già risolto problemi reali (race condition, memory leak, injection vulnerability, TTS blocking). La visione è chiara e la roadmap è concreta.
 
-Il principale debito tecnico è il **monolite `main.js`**: tecnicamente funziona, ma è un rischio operativo crescente. La strategia di estrazione incrementale è corretta, ma richiede di essere portata a termine prima che il file diventi irreversibilmente complesso.
+Il principale debito tecnico è il **monolite `main.js`**: tecnicamente funziona, ma è un rischio operativo crescente. La strategia di estrazione incrementale è corretta e ha già rimosso ~378 righe duplicate (T004b), completato la migrazione di window-manager.js (T004c) e aggiunto test Jest (T005). Resta da completare la migrazione delle service functions browser-agent (T003a).
 
-Il progetto è pronto per la **Phase 7 (packaging)** dal punto di vista funzionale, ma non ancora dal punto di vista della robustezza (nessun test, doppio runtime ACP, encoding corrupto in alcune sezioni).
+Il progetto è pronto per la **Phase 7 (packaging)** dal punto di vista funzionale (installer creato, canvas live abilitato), ma non ancora dal punto di vista della robustezza (regressione openCanvas() da fixare, test non coprono tutti i path).
 
-**Priorità assoluta consigliata:** completare la migrazione `QwenAcpRuntime`, eliminare la doppia implementazione, e aggiungere almeno un test di smoke automatico prima del packaging.
+**Priorità assoluta consigliata:** fix regressione openCanvas() (Review #002 I1), completare T003a, estendere test al path di creazione canvas.
 
 ---
 
 *Documento generato automaticamente da Antigravity dopo analisi completa del codice sorgente.*  
-*File analizzati: 35+ · Righe lette: ~12 000 · Data revisione: 2026-04-02*
+*File analizzati: 35+ · Righe lette: ~12 000 · Data revisione: 2026-04-02*  
+*Aggiornato: 2026-04-02 (Documenter) — metriche, roadmap, verdict allineati a stato reale*

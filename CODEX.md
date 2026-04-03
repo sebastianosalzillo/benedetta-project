@@ -21,7 +21,11 @@
 | `REVIEW.md` | Code review formali per task/PR completati | Revisore compila review prima del merge |
 | `DECISIONI.md` | Decisioni architetturali (ADR) tracciate e motivate | Architect documenta decisioni importanti |
 | `ANTIGRAVITY.md` | Analisi approfondita architettura e codice | Consultare per comprensione completa del sistema |
-| `design-system.md` | Design system UI (da creare) | UI Specialist definisce colori, tipografia, componenti |
+| `design-system.md` | Design system UI | UI Specialist: colori, tipografia, componenti |
+| `STARTUP_AGENTS.md` | Prompt e integrazione per team AI multi-agente | Onboarding nuovi agenti, configurazione ruoli |
+| `STARTUP_ROLES.md` | Ruoli business + tecnici essenziali per startup | Pianificazione team, fasi di scaling |
+| `MULTI_AGENT_WORKFLOW.md` | Workflow completi per 16 ruoli | Riferimento operativo per tutti gli agenti |
+| `AVATAR_CAPABILITIES.md` | Reference completo: emoji, mood, pose, gesti, comandi | Consultare per capacità avatar Nyx |
 
 ---
 
@@ -422,20 +426,20 @@ Portare il runtime a **`model-planned agent with server execution`**:
 ## Current Status
 
 - **Stato:** In progress
-- **Area di lavoro attiva:** `electron/main.js`, `window-manager.js`
+- **Area di lavoro attiva:** Documentazione in riallineamento (Documenter batch)
 - **Ultima build verificata:** `npm run build` passata il 2026-04-02
-- **Task in esecuzione:** T004c refactor stato globale finestre (agent: opencode/mimo-v2-pro-free)
-- **Ultima task completata:** T004b — rimosse ~378 righe duplicate browser-agent da main.js (commit pending)
-- **Blocco corrente:** T004c — 93 reference sites finestre in main.js, factory pura non fattibile per cross-deps (createChatWindow→avatarWindow). Approccio getter/setter + lazy registration.
+- **Task in esecuzione:** Nessuna
+- **Ultima task completata:** T009 — JSDoc aggiunta a preload API
+- **Blocco corrente:** T003a (browser-agent service functions) — richiede migrazione helper da main.js
 - **Decisione architetturale:** ADR-002 (Incapsulamento Completo), ADR-003 (Sblocco T003a/T003c) — entrambe approvate
-- **Prossima azione:** Implementare getter/setter finestre in window-manager.js, poi swap reference sites in main.js in batch da 20
+- **Prossima azione:** T008 (popolare skills/) o T003a (completare migrazione browser-agent helper)
 
 ---
 
 ## Git
 
 - **Repository:** Inizializzato il 2026-04-02
-- **Ultimo commit:** `2ac277e` — T004b partial (aliases browser-agent, T002 junk rimosso)
+- **Ultimo commit:** `8e89479` — T004b: remove ~378 duplicate browser-agent lines from main.js
 - **User:** `salzi <salzi@local>`
 - **.gitignore:** `node_modules/`, `dist/`, `__pycache__/`, `.pinchtab-profile/`, `*.log`, `.env`
 
@@ -472,11 +476,10 @@ Portare il runtime a **`model-planned agent with server execution`**:
 - ✅ `apply_patch` — Unified diff application
 
 **Da implementare (vedi TASK.md):**
-- Migrazione moduli con stato condiviso (T003a/b/c)
-- Test unitari moduli migrati (T005)
-- Packaging Windows installer (T006)
-- Live canvas production (T007)
-- Skills reali (T008)
+- Completare migrazione browser-agent service functions (T003a)
+- Skills reali in `skills/` (T008)
+- JSDoc API preload (T009 — completata)
+- JSDoc moduli estratti (T010)
 
 ---
 
@@ -516,8 +519,8 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | `skills.js` | ✅ Importato | Caricamento skill |
 | `apply-patch.js` | ✅ Importato | Patch diff unificato |
 | `renderer-loop.js` | ✅ Importato | IPC utilities |
-| `window-manager.js` | ⚠️ Parziale | 4 utility pure importate, create*Window inline |
-| `browser-agent.js` | ⚠️ Parziale | 21 utility + 18 alias importati, 29 funzioni duplicate restano in main.js |
+| `window-manager.js` | ✅ Importato | Factory pattern con getter/setter. Tutte le create*Window migrate. |
+| `browser-agent.js` | ⚠️ Parziale | 21 utility + 18 alias importati, ~378 righe duplicate rimosse (T004b). Service functions restano in main.js (T003a blocked) |
 | `computer-control.js` | ✅ Importato | Migrato, nessuna funzione duplicata residua |
 
 ---
@@ -580,16 +583,23 @@ Portare il runtime a **`model-planned agent with server execution`**:
 | 2026-04-02 | Kilo (Architect) | ADR-003 — Sblocco T003a/T003c | Rimozione duplicati browser-agent + factory window-manager |
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T002 junk rimosso, T004b partial (18 alias browser-agent), CODEX allineato | Commit `2ac277e`, build verde |
 | 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T004b completato: ~378 righe duplicate browser-agent rimosse da main.js | Build verde, dead code eliminato (helpers + service functions). T004c iniziato |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T004c completato: getter/setter finestre in window-manager.js, 93 reference sites aggiornati | Build e smoke test passati |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T005 completato: Jest installato, test per window-manager.js e browser-agent.js | Build e test passati |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T006 completato: electron-builder configurato, installer Windows creato | dist-electron/Avatar ACP Setup 0.1.0.exe |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T007 completato: ENABLE_LIVE_CANVAS default true | Build e smoke test passati |
+| 2026-04-02 | opencode/mimo-v2-pro-free (Costruttore) | T009 completato: JSDoc aggiunta a preload API | |
+| 2026-04-02 | Documenter (opencode) | Riallineamento documentazione: CODEX.md, TASK.md, REVIEW.md, ANTIGRAVITY.md | Fix discrepanze docs vs codice |
 
 ---
 
-*Ultimo aggiornamento: 2026-04-02*
-*Prossima azione: **Costruttore** esegue T004c (getter/setter finestre in window-manager.js + swap 93 reference sites in main.js) — vedi TASK.md*
+*Ultimo aggiornamento: 2026-04-02 (Documenter batch — riallineamento documentazione)*
+*Prossima azione: **Costruttore** completa T003a (browser-agent service functions) o **Documenter** popola T008 (skills/)*
 *Ruoli disponibili: Ricercatore, Revisore, Costruttore, Architect, QA/Tester, Documenter, UI Specialist (7 attivi)*
 *Ruoli futuri: Security Specialist, DevOps/Release Manager (da attivare in Phase 7)*
-*Task pronte: T004c (In Progress) — T003a/b/c bloccati o completati*
-*Task completate: T004b ✅*
+*Task pronte: T008 (Pending), T010 (Pending), T003a (Blocked)*
+*Task completate: T003b ✅, T003c ✅, T004b ✅, T004c ✅, T005 ✅, T006 ✅, T007 ✅, T009 ✅*
 *Decisioni approvate: ADR-001 (struttura file), ADR-002 (incapsulamento moduli), ADR-003 (sblocco T003a/T003c)*
-*Review complete: PROPOSTE.md #001 (2/2 revisori)*
-*Fasi: Phase 0-6 completate, Phase 7 (packaging) in inizio*
-*Tool: 20+ implementati, migrazione moduli in corso*
+*Review complete: PROPOSTE.md #001 (2/2 revisori), Review #001 CODEX.md (fix in corso)*
+*Fasi: Phase 0-6 completate, Phase 7 (packaging) iniziato*
+*Tool: 20+ implementati, migrazione moduli quasi completata (resta T003a)*
+*Directory nuove: `skills/` (vuota), `__tests__/` (Jest tests), `dist-electron/` (installer)*

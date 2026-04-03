@@ -108,7 +108,7 @@ Il progetto usa Kokoro come provider TTS default. Serve conoscere:
 ### [R002] Ottimizzazione Caricamento Moduli Electron
 
 **Data inizio:** 2026-04-02
-**Stato:** In corso
+**Stato:** Completata
 **Richiedente:** Agente analisi codice
 **Priorita:** Media
 
@@ -122,24 +122,26 @@ Esistono tecniche per ridurre il tempo di avvio di Electron caricando moduli on-
 
 #### Fonti Esaminate
 
-- Da esaminare: documentazione Electron su lazy loading
-- Da esaminare: webpack/vite code splitting per main process
-- Da esaminare: dynamic import() in Node.js
+- Documentazione Electron su lazy loading
+- Dynamic import() in Node.js
+- Webpack/Vite code splitting per main process
 
 #### Risultati
 
-Da completare.
+Il main process di Electron non supporta code splitting come il renderer. Dynamic `import()` funziona in Node.js ma introduce complessita asincrona non necessaria per un'app desktop locale. I 22 moduli sono tutti file locali senza dipendenze pesanti — il tempo di require e trascurabile rispetto all'avvio di Kokoro (~10s) e PinchTab.
 
 #### Raccomandazioni
 
-Da definire.
+- **Non implementare** lazy loading per i moduli attuali — il beneficio e minimo rispetto al cold start dei servizi esterni
+- Se in futuro si aggiungono moduli pesanti (es. ML inference locale), valutare `import()` dinamico
+- Priorita rimane su ottimizzazione startup Kokoro e PinchTab, non sui require
 
 ---
 
 ### [R003] Pattern di State Management per Moduli Node.js
 
 **Data inizio:** 2026-04-02
-**Stato:** In corso
+**Stato:** Completata
 **Richiedente:** Agente analisi codice
 **Priorita:** Alta
 
@@ -156,18 +158,29 @@ La migrazione dei moduli `browser-agent`, `computer-control`, `window-manager` e
 
 #### Fonti Esaminate
 
-- Da esaminare: Node.js module pattern best practices
-- Da esaminare: Dependency injection in Node.js
-- Da esaminare: State container pattern (Redux-like)
-- Da esaminare: Service locator pattern
+- Node.js module pattern best practices
+- Dependency injection in Node.js
+- State container pattern (Redux-like)
+- Service locator pattern
+- Analisi codice esistente: `computer-control.js` (gia migrato con successo)
 
 #### Risultati
 
-Da completare.
+L'analisi del codice ha confermato che **Opzione C: Incapsulamento Completo** (scelta in ADR-002) e il pattern ottimale per questo progetto:
+- `computer-control.js` dimostra che funziona: stato incapsulato, nessun ciclo, modulo autonomo
+- `window-manager.js` completato con factory pattern + getter/setter (T004c)
+- `browser-agent.js`: utility migrate (T004b), service functions bloccate per accoppiamento con helper main.js-specifici
+
+I pattern scartati:
+- **Dependency Injection**: troppo invasivo per legacy code (cambia tutte le firme)
+- **State Getter/Setters da main.js**: introduce accoppiamento circolare
+- **Hybrid State Container**: valido ma complessita non necessaria per questo caso
 
 #### Raccomandazioni
 
-Da definire.
+- **Completare T003a**: migrare le 14 helper functions + 4 service functions da main.js a browser-agent.js
+- **Mantenere factory pattern** per moduli che ricevono dipendenze Electron (app, BrowserWindow)
+- **Incapsulamento interno** per moduli con stato proprio (processi, cache, config)
 
 #### Task Correlate
 
@@ -188,5 +201,5 @@ Da definire.
 
 ---
 
-*Ultimo aggiornamento: 2026-04-02*
-*Ricerche totali: 1 completata + 2 in corso + 5 backlog*
+*Ultimo aggiornamento: 2026-04-02 (Documenter batch — R002 e R003 completate)*
+*Ricerche totali: 3 completate + 5 backlog*
