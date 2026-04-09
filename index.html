@@ -3,10 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Avatar ACP Desktop</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+        default-src 'self' app: data: blob:;
+        script-src 'self' 'unsafe-inline' 'unsafe-eval' app: http://localhost:5174 http://127.0.0.1:5174;
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' app: data: blob:;
+        font-src 'self' data:;
+        connect-src 'self' app: http://localhost:5174 http://127.0.0.1:5174 ws://localhost:5174 ws://127.0.0.1:5174;
+        media-src 'self' app: data: blob:;
+        object-src 'none';
+        base-uri 'self';
+        frame-ancestors 'none';
+        form-action 'self';
+      "
+    />
+    <title>Benedetta Project</title>
   </head>
   <body>
     <div id="root"></div>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
   </html>

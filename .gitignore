@@ -1,13 +1,49 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+dist-electron/
+
+# Python artifacts
 __pycache__/
 *.pyc
 *.pyo
-*.log
+*.pyd
 electron/__pycache__/
+src/sclm_lite.egg-info/
+sclm_lite.egg-info/
+
+# ML model checkpoints (binary, large)
+runs/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+
+# Cache
 .ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.tsbuildinfo
+
+# Environment variables — NEVER commit secrets
 .env
 .env.local
-*.tsbuildinfo
-.pinchtab-profile/
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS artifacts
+.DS_Store
+Thumbs.db
 $null
+
+# Local profile data
+.pinchtab-profile/
+
+# Editor
+.vscode/settings.json
+.idea/

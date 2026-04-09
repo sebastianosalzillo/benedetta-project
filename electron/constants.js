@@ -147,7 +147,7 @@ const OLLAMA_HOST = env('OLLAMA_HOST', 'http://127.0.0.1:11434');
 
 const TTS_PROVIDER = (env('AVATAR_TTS_PROVIDER', 'kokoro')).trim().toLowerCase();
 const KOKORO_DEFAULT_SPEAKER = (env('KOKORO_DEFAULT_SPEAKER', 'if_sara')).trim().toLowerCase();
-const KOKORO_PYTHON = env('KOKORO_PYTHON', 'C:\\Users\\salzi\\miniconda3\\python.exe');
+const KOKORO_PYTHON = env('KOKORO_PYTHON', '');
 
 // ============================================================
 // Brain
@@ -161,7 +161,7 @@ const PREFERRED_OLLAMA_MODELS = ['qwen3.5:0.8b', 'llama3.2:1b', 'qwen3:1.7b'];
 // Feature flags
 // ============================================================
 
-const ENABLE_LIVE_CANVAS = envBool('NYX_ENABLE_LIVE_CANVAS', false);
+const ENABLE_LIVE_CANVAS = envBool('NYX_ENABLE_LIVE_CANVAS', true);
 
 // ============================================================
 // Workspace
@@ -350,13 +350,13 @@ const PINCHTAB_RECOVERABLE_ERROR_PATTERNS = [
 // ============================================================
 
 const BOOTSTRAP_FIELDS = [
-  { id: 'assistant_name', label: 'come vuoi chiamare l assistente', prompt: 'Come vuoi chiamare l assistente? Esempio: Nyx, Bubu, Iris.' },
-  { id: 'preferred_name', label: 'come vuoi che Nyx ti chiami o ti si rivolga', prompt: 'Come vuoi che Nyx ti chiami o ti si rivolga?' },
-  { id: 'nyx_role', label: 'che ruolo deve avere Nyx per te', prompt: 'Che ruolo deve avere Nyx per te di default? Esempio: pair programmer, operatore desktop, assistente tecnico.' },
-  { id: 'tone_style', label: 'che tono e stile deve usare', prompt: 'Che tono e stile deve usare? Esempio: diretto, tecnico, sintetico, formale.' },
-  { id: 'boundaries', label: 'quali vincoli o cose deve evitare', prompt: 'Cosa deve evitare sempre o quali vincoli non deve rompere?' },
-  { id: 'tool_preferences', label: 'quali strumenti o flussi deve preferire', prompt: 'Quali strumenti o flussi deve preferire? Esempio: browser prima di chiedere, canvas per testi lunghi, niente markdown.' },
-  { id: 'focus_context', label: 'quali progetti, stack o contesti deve tenere presenti', prompt: 'Quali progetti, stack o contesti deve tenere presenti di default?' },
+  { id: 'assistant_name', label: 'what would you like to call the assistant', prompt: 'What would you like to call the assistant? Example: Nyx, Luna, Iris.' },
+  { id: 'preferred_name', label: 'how should the assistant address you', prompt: 'How should the assistant address you?' },
+  { id: 'nyx_role', label: 'what role should the assistant have for you', prompt: 'What role should the assistant have by default? Example: pair programmer, desktop operator, technical assistant.' },
+  { id: 'tone_style', label: 'what tone and style should it use', prompt: 'What tone and style should it use? Example: direct, technical, concise, formal.' },
+  { id: 'boundaries', label: 'what constraints or things should it avoid', prompt: 'What should it always avoid or what constraints should it never break?' },
+  { id: 'tool_preferences', label: 'which tools or workflows should it prefer', prompt: 'Which tools or workflows should it prefer? Example: browse before asking, canvas for long text, no markdown.' },
+  { id: 'focus_context', label: 'which projects, stacks or contexts should it keep in mind', prompt: 'Which projects, stacks or contexts should it keep in mind by default?' },
 ];
 
 const BOOTSTRAP_EMPTY_VALUES = new Set(['-', 'n/a', 'na', 'non specificato', 'non so', 'da definire']);
