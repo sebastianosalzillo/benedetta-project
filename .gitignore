@@ -1,3 +1,20 @@
+# Internal developer docs — not for public repo
+CLAUDE.md
+CODEX.md
+DECISIONI.md
+MULTI_AGENT_WORKFLOW.md
+PROPOSTE.md
+REVIEW.md
+REVIEW_TOOL_AND_AVATAR.md
+RICERCA.md
+STARTUP_AGENTS.md
+STARTUP_ROLES.md
+TASK.md
+REFACTOR_PLAN.md
+ANTIGRAVITY.md
+AVATAR_CAPABILITIES.md
+design-system.md
+
 # Dependencies
 node_modules/
 
