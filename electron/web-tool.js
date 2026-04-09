@@ -1,8 +1,58 @@
-const { spawn } = require('child_process');
+/**
+ * @fileoverview Web fetch and search tool.
+ * Provides HTTP fetching with HTML-to-markdown conversion and DuckDuckGo search.
+ */
 
 const MAX_WEB_RESULTS = 8;
 const DEFAULT_TIMEOUT_MS = 15000;
 
+/**
+ * Web fetch result.
+ * @typedef {Object} WebFetchResult
+ * @property {boolean} ok - Whether the fetch succeeded
+ * @property {string} [url] - The URL that was fetched
+ * @property {string} [content] - The page content (HTML or markdown)
+ * @property {string} [format] - Output format ('markdown', 'text', 'html')
+ * @property {string} [error] - Error message if failed
+ */
+
+/**
+ * Web fetch options.
+ * @typedef {Object} WebFetchOptions
+ * @property {string} [format='markdown'] - Output format
+ * @property {number} [timeout=15000] - Request timeout in milliseconds
+ */
+
+/**
+ * Web search result item.
+ * @typedef {Object} WebSearchItem
+ * @property {string} title - Result title
+ * @property {string} url - Result URL
+ */
+
+/**
+ * Web search result.
+ * @typedef {Object} WebSearchResult
+ * @property {boolean} ok - Whether the search succeeded
+ * @property {string} [query] - The search query
+ * @property {WebSearchItem[]} [results] - Array of search results
+ * @property {number} [total] - Number of results returned
+ * @property {string} [error] - Error message if failed
+ */
+
+/**
+ * Fetch a URL and optionally convert HTML to markdown or text.
+ *
+ * @param {string} url - URL to fetch
+ * @param {WebFetchOptions} [options] - Fetch options
+ * @returns {Promise<WebFetchResult>} Fetch result with content or error
+ * @example
+ * // Fetch and convert to markdown
+ * await webFetch('https://example.com', { format: 'markdown' })
+ *
+ * // Fetch raw HTML
+ * await webFetch('https://example.com/api/data')
+ */
 async function webFetch(url, options = {}) {
   const { format = 'markdown', timeout = DEFAULT_TIMEOUT_MS } = options;
   try {
@@ -34,6 +84,18 @@ async function webFetch(url, options = {}) {
   }
 }
 
+/**
+ * Search the web using DuckDuckGo HTML interface.
+ *
+ * @param {string} query - Search query string
+ * @param {Object} [options] - Search options
+ * @param {number} [options.numResults=8] - Number of results to return
+ * @param {number} [options.timeout=15000] - Request timeout in milliseconds
+ * @returns {Promise<WebSearchResult>} Search results or error
+ * @example
+ * // Search for 5 results
+ * await webSearch('JavaScript async/await', { numResults: 5 })
+ */
 async function webSearch(query, options = {}) {
   const { numResults = MAX_WEB_RESULTS, timeout = DEFAULT_TIMEOUT_MS } = options;
   try {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, clipboard, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, clipboard, shell, protocol, session, net: electronNet } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const fs = require('fs');
@@ -7,6 +7,33 @@ const net = require('net');
 const { randomUUID } = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const { createRendererLoop, isRendererUnavailable } = require('./renderer-loop');
+const {
+  buildRendererCsp,
+  createPermissionRequestHandler,
+  isTrustedAppUrl,
+  registerValidatedIpcHandler,
+} = require('./security');
+const {
+  installAppProtocol,
+  registerAppProtocolSchemes,
+} = require('./app-protocol');
+const {
+  registerSafeIpcHandlers,
+} = require('./register-safe-ipc');
+const {
+  sanitizeShellOutput,
+  sanitizeFileOutput,
+  sanitizeWebOutput,
+  sanitizeGenericOutput,
+} = require('./middleware/output-sanitizer');
+
+registerAppProtocolSchemes(protocol);
+app.enableSandbox();
+
+// Reduce GPU memory pressure when multiple windows start simultaneously (Windows).
+// Only safe flags — use-angle and enable-features caused GPU process crashes (0xC0000409).
+app.commandLine.appendSwitch('disable-gpu-memory-buffer-compositor-resources');
+app.commandLine.appendSwitch('disable-gpu-sandbox');
 
 // ============================================================
 // Refactored modules - ready for incremental adoption
@@ -34,6 +61,18 @@ const {
   runMemorySearch,
   runSessionSearch,
   runMemoryGet,
+  normalizeLine,
+  truncatePromptText,
+  normalizeSpeechText,
+  readJsonFile,
+  writeJsonFile,
+  readTextFile,
+  writeTextFile,
+  isBootstrapAnswerEmpty,
+  getBootstrapMissingFieldIds,
+  getBootstrapInitialPrompt,
+  buildBootstrapAnswersPrompt,
+  updateBootstrapStateFromAcp,
 } = require('./workspace-manager');
 const {
   runShellCommand,
@@ -66,6 +105,10 @@ const {
   webSearch,
 } = require('./web-tool');
 const {
+  generateOllamaResponse,
+  listOllamaModels,
+} = require('./ollama-client');
+const {
   createDefaultTaskState,
   handleTaskAction,
   getTaskSummary,
@@ -91,6 +134,7 @@ const {
   cleanupOldDreams,
   stopDream,
   getDreamStatus,
+  DREAM_IDLE_TIMEOUT_MS,
 } = require('./dream-mode');
 const {
   createDefaultPersonalityState,
@@ -137,74 +181,33 @@ const {
   getPywinautoMcpLogTail: ccGetPywinautoMcpLogTail,
 } = require('./computer-control');
 const {
-  normalizeBrowserUrl: baNormalizeBrowserUrl,
   buildBrowserTitleFromUrl: baBuildBrowserTitleFromUrl,
   normalizeCanvasLayout: baNormalizeCanvasLayout,
-  parsePinchtabSnapshotText: baParsePinchtabSnapshotText,
-  trimBrowserText: baTrimBrowserText,
-  getActiveBrowserSnapshotItem: baGetActiveBrowserSnapshotItem,
-  getBrowserSnapshotItemByRef: baGetBrowserSnapshotItemByRef,
-  extractSnapshotItemLabelText: baExtractSnapshotItemLabelText,
-  extractSnapshotItemValue: baExtractSnapshotItemValue,
-  isTextInputFallbackCandidate: baIsTextInputFallbackCandidate,
-  isClickFallbackCandidate: baIsClickFallbackCandidate,
-  sanitizeBrowserActionText: baSanitizeBrowserActionText,
-  getBrowserComparableState: baGetBrowserComparableState,
-  didBrowserStateChange: baDidBrowserStateChange,
-  didBrowserClickProgress: baDidBrowserClickProgress,
-  isPinchtabRecoverableActionError: baIsPinchtabRecoverableActionError,
-  isPinchtabRouteNotFoundError: baIsPinchtabRouteNotFoundError,
-  isYouTubeSearchRef: baIsYouTubeSearchRef,
-  buildYouTubeSearchUrl: baBuildYouTubeSearchUrl,
-  summarizeBrowserDirective: baSummarizeBrowserDirective,
-  summarizeBrowserReason: baSummarizeBrowserReason,
-  getPinchtabAuthToken: baGetPinchtabAuthToken,
-  setPinchtabAuthToken: baSetPinchtabAuthToken,
-  isPinchtabRunning: baIsPinchtabRunning,
-  ensurePinchtabService: baEnsurePinchtabService,
+  resolveBrowserCanvasContent: baResolveBrowserCanvasContent,
+  performBrowserAction: baPerformBrowserAction,
   stopPinchtabService: baStopPinchtabService,
-  cleanupPinchtabProfile: baCleanupPinchtabProfile,
-  getPinchtabProfilePath: baGetPinchtabProfilePath,
-  hasPinchtabLauncher: baHasPinchtabLauncher,
-  probePinchtabHealth: baProbePinchtabHealth,
-  pinchtabRequest: baPinchtabRequest,
-  pinchtabRequestJson: baPinchtabRequestJson,
-  pinchtabTabRequest: baPinchtabTabRequest,
-  pinchtabTabRequestJson: baPinchtabTabRequestJson,
-  listPinchtabTabs: baListPinchtabTabs,
-  pickBestPinchtabTabId: baPickBestPinchtabTabId,
-  resolvePinchtabTabState: baResolvePinchtabTabState,
-  runPinchtabAction: baRunPinchtabAction,
-  evaluatePinchtabExpression: baEvaluatePinchtabExpression,
-  findPinchtabRef: baFindPinchtabRef,
-  killPinchtabListenerProcess: baKillPinchtabListenerProcess,
-  focusPinchtabChromeWindow: baFocusPinchtabChromeWindow,
-  createPinchtabHeaders: baCreatePinchtabHeaders,
 } = require('./browser-agent');
 // Aliases for backward compat — functions now live in browser-agent.js
-const ensurePinchtabService = baEnsurePinchtabService;
-const stopPinchtabService = baStopPinchtabService;
-const probePinchtabHealth = baProbePinchtabHealth;
-const pinchtabRequest = baPinchtabRequest;
-const pinchtabRequestJson = baPinchtabRequestJson;
-const pinchtabTabRequest = baPinchtabTabRequest;
-const pinchtabTabRequestJson = baPinchtabTabRequestJson;
-const listPinchtabTabs = baListPinchtabTabs;
-const pickBestPinchtabTabId = baPickBestPinchtabTabId;
-const resolvePinchtabTabState = baResolvePinchtabTabState;
-const runPinchtabAction = baRunPinchtabAction;
-const evaluatePinchtabExpression = baEvaluatePinchtabExpression;
-const findPinchtabRef = baFindPinchtabRef;
-const killPinchtabListenerProcess = baKillPinchtabListenerProcess;
-const focusPinchtabChromeWindow = baFocusPinchtabChromeWindow;
-const createPinchtabHeaders = baCreatePinchtabHeaders;
-const cleanupPinchtabProfile = baCleanupPinchtabProfile;
-const getPinchtabProfilePath = baGetPinchtabProfilePath;
 const {
   getDisplayById: wmGetDisplayById,
   isBoundsVisible: wmIsBoundsVisible,
   getWindowLayout: wmGetWindowLayout,
   getCanvasBoundsForLayout: wmGetCanvasBoundsForLayout,
+  createAvatarWindow: wmCreateAvatarWindow,
+  createChatWindow: wmCreateChatWindow,
+  createCanvasWindow: wmCreateCanvasWindow,
+  getAvatarWindow: wmGetAvatarWindow,
+  setAvatarWindow: wmSetAvatarWindow,
+  getChatWindow: wmGetChatWindow,
+  setChatWindow: wmSetChatWindow,
+  getCanvasWindow: wmGetCanvasWindow,
+  setCanvasWindow: wmSetCanvasWindow,
+  getWindows: wmGetWindows,
+  persistWindowStateNow: wmPersistWindowStateNow,
+  schedulePersistWindowState: wmSchedulePersistWindowState,
+  bindPersistentBounds: wmBindPersistentBounds,
+  applyAlwaysOnTop: wmApplyAlwaysOnTop,
+  getCurrentWindowPrefs: wmGetCurrentWindowPrefs,
 } = require('./window-manager');
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -221,7 +224,6 @@ const PINCHTAB_HOST = C.PINCHTAB_HOST;
 const PINCHTAB_PORT = C.PINCHTAB_PORT;
 const PINCHTAB_URL = C.PINCHTAB_URL;
 const PINCHTAB_TOKEN = C.PINCHTAB_TOKEN;
-// pinchtabAuthToken now managed by browser-agent.js module (use baGetPinchtabAuthToken / baSetPinchtabAuthToken)
 const PINCHTAB_HEADLESS = C.PINCHTAB_HEADLESS;
 const PINCHTAB_STARTUP_TIMEOUT_MS = C.PINCHTAB_STARTUP_TIMEOUT_MS;
 const PYWINAUTO_MCP_REPO_URL = C.PYWINAUTO_MCP_REPO_URL;
@@ -279,9 +281,7 @@ function createDefaultBootstrapState() {
   return { active: false, startedAt: null, updatedAt: null, stepIndex: 0, currentPrompt: '', answers: {} };
 }
 
-let avatarWindow = null;
-let chatWindow = null;
-let canvasWindow = null;
+
 let currentStatus = 'idle';
 let brainMode = 'booting';
 let streamStatus = STREAM_STATUS.DISCONNECTED;
@@ -300,11 +300,8 @@ let avatarStatusLoop = null;
 let chatStatusLoop = null;
 let canvasStatusLoop = null;
 let cleanupStarted = false;
-let ttsServiceProcess = null;
-let ttsServiceStartupPromise = null;
 let ttsServiceLogTail = '';
-// pinchtabProcess/pinchtabStartupPromise/pinchtabLogTail managed by browser-agent.js (Opzione C)
-// pywinautoMcpProcess/pywinautoMcpStartupPromise/pywinautoMcpLogTail moved to computer-control.js (Opzione C)
+let ttsWarmupTimer = null;
 let qwenAcpStderrTail = '';
 
 let taskState = createDefaultTaskState();
@@ -482,47 +479,6 @@ function createDefaultWorkspaceState() {
   };
 }
 
-function getBootstrapFields() {
-  return [
-    {
-      id: 'assistant_name',
-      label: 'come vuoi chiamare l assistente',
-      prompt: 'Come vuoi chiamare l assistente? Esempio: Nyx, Bubu, Iris.',
-    },
-    {
-      id: 'preferred_name',
-      label: 'come vuoi che Nyx ti chiami o ti si rivolga',
-      prompt: 'Come vuoi che Nyx ti chiami o ti si rivolga?',
-    },
-    {
-      id: 'nyx_role',
-      label: 'che ruolo deve avere Nyx per te',
-      prompt: 'Che ruolo deve avere Nyx per te di default? Esempio: pair programmer, operatore desktop, assistente tecnico.',
-    },
-    {
-      id: 'tone_style',
-      label: 'che tono e stile deve usare',
-      prompt: 'Che tono e stile deve usare? Esempio: diretto, tecnico, sintetico, formale.',
-    },
-    {
-      id: 'boundaries',
-      label: 'quali vincoli o cose deve evitare',
-      prompt: 'Cosa deve evitare sempre o quali vincoli non deve rompere?',
-    },
-    {
-      id: 'tool_preferences',
-      label: 'quali strumenti o flussi deve preferire',
-      prompt: 'Quali strumenti o flussi deve preferire? Esempio: browser prima di chiedere, canvas per testi lunghi, niente markdown.',
-    },
-    {
-      id: 'focus_context',
-      label: 'quali progetti, stack o contesti deve tenere presenti',
-      prompt: 'Quali progetti, stack o contesti deve tenere presenti di default?',
-    },
-  ];
-}
-
-// getBootstrapMissingFieldIds imported from workspace-manager.js
 
 async function getBrainSpawnConfig(prompt, sessionConfig = {}, overrideBrain = null) {
   const selectedBrain = overrideBrain || getSelectedBrainOption();
@@ -560,23 +516,6 @@ function getAppFilePath(name) {
   return path.join(app.getPath('userData'), name);
 }
 
-function readJsonFile(filePath, fallback) {
-  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return fallback; }
-}
-
-function writeJsonFile(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), 'utf8');
-}
-
-function readTextFile(filePath, fallback = '') {
-  try { return fs.readFileSync(filePath, 'utf8'); } catch { return fallback; }
-}
-
-function writeTextFile(filePath, value) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, String(value || ''), 'utf8');
-}
 
 function getCanvasStatePath() {
   return getAppFilePath('canvas-state.json');
@@ -662,12 +601,9 @@ function findCommandPath(commandName) {
   return '';
 }
 
+// normalizeLine, normalizeSpeechText, truncatePromptText imported from workspace-manager
 // normalizeComputerOcrText, stripAnsi imported from modules above
 // createStreamEmitter imported from state-manager
-
-function normalizeLine(text, maxLength) {
-  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
-}
 
 function normalizeComputerOcrText(text, maxLength) {
   const normalized = String(text || '')
@@ -683,26 +619,6 @@ function normalizeComputerOcrText(text, maxLength) {
   return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}\u2026`;
 }
 
-function normalizeSpeechText(text) {
-  return String(text || '')
-    .replace(/\r/g, '')
-    .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{20E3}\u{231A}-\u{231B}\u{23E9}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25AB}\u{25B6}\u{25C0}\u{25FB}-\u{25FE}]/gu, '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
-
-function truncatePromptText(text, maxChars) {
-  const normalized = String(text || '').trim();
-  if (!normalized || !Number.isFinite(maxChars) || maxChars <= 0) return '';
-  if (normalized.length <= maxChars) return normalized;
-  const cutoff = Math.max(0, maxChars - 16);
-  return `${normalized.slice(0, cutoff).trim()}\n\n[TRUNCATED]`;
-}
-
-// Legacy aliases for backward compatibility
-const normalizeLineLegacy = normalizeLine;
 
 function getBrainSessionHint(brainId) {
   return brainSessionHints[String(brainId || '').trim().toLowerCase()] || { hasSession: false };
@@ -838,7 +754,8 @@ async function runQwenAcpTurn(requestId, prompt, userText, sessionConfig, option
     }
 
     const buffer = String(turnResult?.buffer || '').trim();
-    const response = parseInlineResponse(buffer, userText);
+    const response = parseInlineResponse(buffer, userText, { strictJson: options.strictJson === true });
+    const phasePlan = parsePhasePlan(buffer, userText, { strictJson: options.strictJson === true });
     if (turnResult?.reasoning && !response.reasoning) {
       response.reasoning = normalizeLine(turnResult.reasoning, 4000);
     }
@@ -846,6 +763,7 @@ async function runQwenAcpTurn(requestId, prompt, userText, sessionConfig, option
     return {
       buffer,
       response,
+      phasePlan,
       sessionId: turnResult?.sessionId || sessionId,
       stopReason: turnResult?.stopReason || 'end_turn',
     };
@@ -882,28 +800,7 @@ async function probeOllamaStatus(host, model) {
   const normalizedModel = String(model || '').trim() || DEFAULT_OLLAMA_MODEL;
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
-
-    const response = await fetch(`${normalizedHost}/api/tags`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      return {
-        checkedAt: new Date().toISOString(),
-        reachable: false,
-        modelAvailable: false,
-        availableModels: [],
-        error: normalizeLine(`Ollama responded with status ${response.status}`, 220),
-      };
-    }
-
-    const payload = await response.json();
-    const models = Array.isArray(payload?.models)
-      ? payload.models.map((item) => String(item?.name || '').trim()).filter(Boolean)
-      : [];
+    const models = await listOllamaModels(normalizedHost);
 
     return {
       checkedAt: new Date().toISOString(),
@@ -1126,27 +1023,7 @@ async function testBrainSelection(brainId = '') {
         message: `Model Ollama non presente: ${launch.model}`,
       };
     }
-    const response = await fetch(`${launch.url}/api/generate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: launch.model,
-        prompt: 'Rispondi solo con OK.',
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        brainId: targetBrain.id,
-        message: `Ollama error ${response.status}`,
-      };
-    }
-
-    const payload = await response.json();
+    const payload = await generateOllamaResponse(launch.url, launch.model, 'Rispondi solo con OK.');
     return {
       ok: true,
       brainId: targetBrain.id,
@@ -1702,87 +1579,9 @@ function buildRecentDailyMemoryPrompt(limit = 2) {
   return sections.length ? `RECENT_DAILY_MEMORY:\n${sections.join('\n\n')}` : '';
 }
 
-// ============================================================
-// Bootstrap helper functions (missing from main.js)
-// ============================================================
-
-const BOOTSTRAP_FIELDS = [
-  { id: 'assistant_name', label: 'come vuoi chiamare l assistente' },
-  { id: 'preferred_name', label: 'come vuoi che Nyx ti chiami' },
-  { id: 'nyx_role', label: 'che ruolo deve avere Nyx' },
-  { id: 'tone_style', label: 'che tono e stile deve usare' },
-  { id: 'boundaries', label: 'quali vincoli o cose deve evitare' },
-  { id: 'tools', label: 'quali strumenti o flussi deve preferire' },
-  { id: 'context', label: 'quali progetti o contesti deve tenere presenti' },
-];
-
-function isBootstrapAnswerEmpty(value = '') {
-  const v = String(value || '').trim().toLowerCase();
-  return !v || v === 'nessuno' || v === 'libero' || v === 'niente' || v === '-';
-}
-
-function getBootstrapMissingFieldIds(answers = {}) {
-  return BOOTSTRAP_FIELDS.filter((f) => !isBootstrapAnswerEmpty(answers[f.id])).length === 0
-    ? BOOTSTRAP_FIELDS.map((f) => f.id)
-    : BOOTSTRAP_FIELDS.filter((f) => isBootstrapAnswerEmpty(answers[f.id])).map((f) => f.id);
-}
-
-function getBootstrapInitialPrompt() {
-  return [
-    'Bootstrap iniziale.',
-    'In una sola risposta dimmi come vuoi chiamare l assistente, come vuoi che ti chiami o ti si rivolga, che ruolo deve avere, che tono deve usare, eventuali vincoli, quali strumenti o flussi deve preferire e quali progetti o contesti deve tenere presenti.',
-    'Se qualche punto non conta, scrivi nessuno o libero.',
-  ].join(' ');
-}
-
-function buildBootstrapAnswersPrompt(bootstrapStateArg) {
-  const answers = bootstrapStateArg.answers || {};
-  const sections = BOOTSTRAP_FIELDS.map((field) => {
-    const value = String(answers[field.id] || '').trim();
-    if (isBootstrapAnswerEmpty(value)) return '';
-    return `- ${field.id}: ${value.replace(/\s+/g, ' ').trim().slice(0, 280)}`;
-  }).filter(Boolean);
-  return sections.length ? `BOOTSTRAP_ANSWERS:\n${sections.join('\n')}` : '';
-}
-
-function updateBootstrapStateFromAcp(bootstrapStateArg, reasoning = '', options = {}) {
-  const result = { answers: {}, missingIds: [], status: 'collecting', nextPrompt: '' };
-  const validFieldIds = new Set(BOOTSTRAP_FIELDS.map((f) => f.id));
-  for (const rawLine of String(reasoning || '').split(/\r?\n/)) {
-    const line = rawLine.replace(/^\s*[-*]\s*/, '').trim();
-    if (!line || /^bootstrap_capture:?$/i.test(line)) continue;
-    const match = line.match(/^([a-z_]+)\s*=\s*(.*)$/i);
-    if (!match) continue;
-    const key = match[1].toLowerCase();
-    const value = match[2].trim();
-    if (validFieldIds.has(key)) { if (!isBootstrapAnswerEmpty(value)) result.answers[key] = value; continue; }
-    if (key === 'missing') {
-      result.missingIds = value.toLowerCase() === 'none' ? [] : value.split(',').map((i) => i.trim()).filter((i) => validFieldIds.has(i));
-      continue;
-    }
-    if (key === 'status') { result.status = /complete/i.test(value) ? 'complete' : 'collecting'; continue; }
-    if (key === 'next_prompt') { result.nextPrompt = value; }
-  }
-  const mergedAnswers = { ...(bootstrapStateArg.answers || {}), ...(result.answers || {}) };
-  const missingIds = result.missingIds.length ? result.missingIds : getBootstrapMissingFieldIds(mergedAnswers);
-  const completed = result.status === 'complete' || !missingIds.length;
-  if (completed) {
-    bootstrapStateArg.answers = mergedAnswers;
-    bootstrapStateArg.active = false;
-    bootstrapStateArg.currentPrompt = '';
-    bootstrapStateArg.updatedAt = new Date().toISOString();
-    bootstrapStateArg.stepIndex = Math.max(1, Number(bootstrapStateArg.stepIndex || 0) + 1);
-    return { completed: true };
-  }
-  const fallbackPrompt = options.mode === 'start' ? getBootstrapInitialPrompt() : `Mi manca ancora questo: ${BOOTSTRAP_FIELDS.filter((f) => missingIds.includes(f.id)).map((f) => f.label).join(', ')}. Rispondi pure in una sola frase.`;
-  const nextPrompt = String(result.nextPrompt || fallbackPrompt).replace(/\s+/g, ' ').trim().slice(0, 320) || fallbackPrompt;
-  bootstrapStateArg.active = true;
-  bootstrapStateArg.answers = mergedAnswers;
-  bootstrapStateArg.currentPrompt = nextPrompt;
-  bootstrapStateArg.updatedAt = new Date().toISOString();
-  bootstrapStateArg.stepIndex = Math.max(1, Number(bootstrapStateArg.stepIndex || 0) + 1);
-  return { completed: false, nextPrompt };
-}
+// Bootstrap helpers (isBootstrapAnswerEmpty, getBootstrapMissingFieldIds,
+// getBootstrapInitialPrompt, buildBootstrapAnswersPrompt, updateBootstrapStateFromAcp)
+// imported from workspace-manager — use C.BOOTSTRAP_FIELDS for field definitions.
 
 function buildWorkspaceUpdateBlock(directive = {}) {
   const mode = String(directive.mode || 'append').trim();
@@ -1791,47 +1590,6 @@ function buildWorkspaceUpdateBlock(directive = {}) {
   if (mode === 'replace' || mode === 'overwrite') return content;
   return `\n\n${content}`;
 }
-
-// PinchTab functions moved to browser-agent.js (Opzione C)
-// Uses: baEnsurePinchtabService, baStopPinchtabService, baPinchtabRequest, baPinchtabRequestJson,
-//       baPinchtabTabRequest, baPinchtabTabRequestJson, baListPinchtabTabs, baPickBestPinchtabTabId,
-//       baResolvePinchtabTabState, baRunPinchtabAction, baEvaluatePinchtabExpression, baFindPinchtabRef,
-//       baProbePinchtabHealth, baGetPinchtabProfilePath, baCleanupPinchtabProfile,
-//       baKillPinchtabListenerProcess, baFocusPinchtabChromeWindow, baCreatePinchtabHeaders
-
-// ============================================================
-// Pywinauto functions moved to computer-control.js (Opzione C)
-
-// PinchTab functions moved to browser-agent.js (Opzione C)
-// Uses: baEnsurePinchtabService, baStopPinchtabService, baPinchtabRequest, baPinchtabRequestJson,
-//       baPinchtabTabRequest, baPinchtabTabRequestJson, baListPinchtabTabs, baPickBestPinchtabTabId,
-//       baResolvePinchtabTabState, baRunPinchtabAction, baEvaluatePinchtabExpression, baFindPinchtabRef,
-//       baProbePinchtabHealth, baGetPinchtabProfilePath, baCleanupPinchtabProfile,
-//       baKillPinchtabListenerProcess, baFocusPinchtabChromeWindow, baCreatePinchtabHeaders
-
-// ============================================================
-// Pywinauto functions moved to computer-control.js (Opzione C)
-// Uses: ccEnsurePywinautoMcpService, ccStopPywinautoMcpService, ccCallPywinautoTool,
-//       ccReadPywinautoActiveWindowDetails, ccGetPywinautoMcpLogTail
-
-function hasGitBinary() {
-  try {
-    const result = require('child_process').spawnSync('git', ['--version'], { windowsHide: true, encoding: 'utf8' });
-    return result.status === 0;
-  } catch { return false; }
-}
-
-// PinchTab functions imported from browser-agent.js (Opzione C)
-// Aliases: baEnsurePinchtabService, baStopPinchtabService, baPinchtabRequest, baPinchtabRequestJson,
-//          baPinchtabTabRequest, baPinchtabTabRequestJson, baListPinchtabTabs, baPickBestPinchtabTabId,
-//          baResolvePinchtabTabState, baRunPinchtabAction, baEvaluatePinchtabExpression, baFindPinchtabRef,
-//          baProbePinchtabHealth, baGetPinchtabProfilePath, baCleanupPinchtabProfile,
-//          baKillPinchtabListenerProcess, baFocusPinchtabChromeWindow, baCreatePinchtabHeaders
-
-// ============================================================
-// Pywinauto functions imported from computer-control.js (Opzione C)
-// Uses: ccEnsurePywinautoMcpService, ccStopPywinautoMcpService, ccCallPywinautoTool,
-//       ccReadPywinautoActiveWindowDetails, ccGetPywinautoMcpLogTail
 
 function hasGitBinary() {
   try {
@@ -1920,21 +1678,7 @@ function setTtsState(status, options = {}) {
   broadcastStatus();
 }
 
-function getCurrentWindowPrefs() {
-  const state = readJsonFile(getWindowStatePath(), {});
 
-  return {
-    avatarAlwaysOnTop: avatarWindow && !avatarWindow.isDestroyed()
-      ? avatarWindow.isAlwaysOnTop()
-      : state.avatar?.alwaysOnTop ?? true,
-    chatAlwaysOnTop: chatWindow && !chatWindow.isDestroyed()
-      ? chatWindow.isAlwaysOnTop()
-      : state.chat?.alwaysOnTop ?? true,
-    canvasAlwaysOnTop: canvasWindow && !canvasWindow.isDestroyed()
-      ? canvasWindow.isAlwaysOnTop()
-      : state.canvas?.alwaysOnTop ?? false,
-  };
-}
 
 function sanitizeForIpc(obj) {
   try {
@@ -1995,11 +1739,7 @@ function getAppStatePayload() {
         error: String(brainState.ollamaStatus.error || ''),
       } : null,
     },
-    windowPrefs: {
-      avatarAlwaysOnTop: Boolean(getCurrentWindowPrefs().avatarAlwaysOnTop),
-      chatAlwaysOnTop: Boolean(getCurrentWindowPrefs().chatAlwaysOnTop),
-      canvasAlwaysOnTop: Boolean(getCurrentWindowPrefs().canvasAlwaysOnTop),
-    },
+    windowPrefs: wmGetCurrentWindowPrefs(wmGetAvatarWindow(), wmGetChatWindow(), wmGetCanvasWindow(), readJsonFile(getWindowStatePath(), {})),
     canvas: {
       isOpen: Boolean(canvasState.isOpen),
       layout: String(canvasState.layout || 'right-docked'),
@@ -2060,6 +1800,13 @@ function getAppStatePayload() {
       ocrStatus: String(computerState.ocrStatus || 'idle'),
       error: String(computerState.error || ''),
     },
+    dream: {
+      isActive: Boolean(dreamState.isActive),
+      lastInteractionAt: dreamState.lastInteractionAt ? new Date(dreamState.lastInteractionAt).toISOString() : null,
+      lastDreamAt: dreamState.lastDreamAt || null,
+      dreamCount: Number(dreamState.dreamCount || 0),
+      idleTimeoutMs: Number(DREAM_IDLE_TIMEOUT_MS || 0),
+    },
     workspace: {
       path: String(workspaceState.path || ''),
       dailyMemoryPath: String(workspaceState.dailyMemoryPath || ''),
@@ -2098,16 +1845,18 @@ function sendStatusToWindow(targetWindow) {
 }
 
 function sendAvatarCommand(command) {
-  const available = avatarWindow && !isRendererUnavailable(avatarWindow);
+  const aw = wmGetAvatarWindow();
+  const available = aw && !isRendererUnavailable(aw);
   if (!available) {
     return false;
   }
-  return avatarWindow.webContents.send('avatar-command', command) !== false;
+  return aw.webContents.send('avatar-command', command) !== false;
 }
 
 function emitChatStream(event) {
-  if (chatWindow && !isRendererUnavailable(chatWindow)) {
-    chatWindow.webContents.send('chat-stream', event);
+  const cw = wmGetChatWindow();
+  if (cw && !isRendererUnavailable(cw)) {
+    cw.webContents.send('chat-stream', event);
   }
 }
 
@@ -2130,7 +1879,66 @@ function emitSystemChatStream(requestId, message) {
   });
 }
 
-function sendCanvasState(targetWindow = canvasWindow) {
+async function runDreamCycle(personalityPath, options = {}) {
+  // Fix B: skip if chatHistory unchanged since last dream run
+  if (dreamState.lastHistoryLen === chatHistory.length && dreamState.dreamCount > 0) {
+    return;
+  }
+
+  const requestId = options.requestId || `dream-${Date.now()}`;
+  dreamState.isActive = true;
+  broadcastStatus();
+  emitSystemChatStream(requestId, 'Dream mode attiva. Sto analizzando la sessione in background.');
+
+  try {
+    const analysis = analyzeConversation(chatHistory);
+
+    // Fix C: passa summary reale invece di testo hardcoded
+    const conversationSummary = buildConversationSummary(chatHistory);
+    const note = generateDreamNote(analysis, conversationSummary);
+
+    // Archivio in dreams/
+    const dreamPath = path.join(app.getPath('userData'), 'dreams');
+    saveDreamNote(dreamPath, note);
+    cleanupOldDreams(dreamPath);
+
+    // Fix A: scrivi anche nella daily memory del workspace → l'agente la vede automaticamente
+    if (analysis.preferences.length || analysis.topics.length || conversationSummary) {
+      const now = new Date();
+      const dateKey = now.toISOString().slice(0, 10);
+      const dailyPath = path.join(getWorkspaceDailyMemoryPath(), `${dateKey}.md`);
+      const existing = readTextFile(dailyPath, '').trim();
+      const header = existing ? '\n\n' : '# Daily Memory\n\n';
+      const block = [
+        `## ${now.toISOString()} | dream`,
+        '',
+        conversationSummary || '',
+        analysis.preferences.length ? `\n### Preferenze rilevate\n${analysis.preferences.map((p) => `- ${p}`).join('\n')}` : '',
+        analysis.topics.length ? `\n### Argomenti\n${analysis.topics.map((t) => `- ${t}`).join('\n')}` : '',
+      ].filter(Boolean).join('\n');
+      writeTextFile(dailyPath, `${existing}${header}${block}\n`, WORKSPACE_FILE_MAX_CHARS);
+    }
+
+    // Fix B: aggiorna il marker per la prossima run
+    dreamState.lastHistoryLen = chatHistory.length;
+
+    if (chatHistory.length > 2 && personalityPath) {
+      const lastUser = chatHistory.filter((m) => m.role === 'user').slice(-1)[0];
+      const lastAssistant = chatHistory.filter((m) => m.role === 'assistant').slice(-1)[0];
+      updatePersonality(personalityState, lastUser?.text || '', lastAssistant?.text || '');
+      savePersonality(personalityPath, personalityState);
+    }
+
+    emitSystemChatStream(requestId, 'Dream mode completata. Ho aggiornato note e stato interno.');
+  } catch (error) {
+    emitSystemChatStream(requestId, `Dream mode terminata con errore: ${error?.message || 'errore sconosciuto'}.`);
+  } finally {
+    dreamState.isActive = false;
+    broadcastStatus();
+  }
+}
+
+function sendCanvasState(targetWindow = wmGetCanvasWindow()) {
   if (targetWindow && !isRendererUnavailable(targetWindow)) {
     targetWindow.webContents.send('canvas-state', sanitizeForIpc(canvasState));
   }
@@ -2154,27 +1962,6 @@ function resetBrowserAgentState(patch = {}) {
     updatedAt: patch.updatedAt || new Date().toISOString(),
   };
   broadcastStatus();
-}
-
-function summarizeBrowserDirective(directive = {}) {
-  const action = String(directive.action || directive.kind || 'refresh').trim().toLowerCase();
-  if (!action) return 'refresh';
-  if (['open', 'show', 'navigate'].includes(action)) {
-    return directive.url || directive.value ? `open ${directive.url || directive.value}` : 'open page';
-  }
-  if (action === 'click') {
-    return directive.ref ? `click ref ${directive.ref}` : 'click';
-  }
-  if (action === 'type' || action === 'fill') {
-    return directive.ref ? `type into ref ${directive.ref}` : 'type';
-  }
-  if (action === 'press') {
-    return `press ${directive.key || 'Enter'}`;
-  }
-  if (action === 'refresh') {
-    return 'refresh page';
-  }
-  return action;
 }
 
 function createStreamEmitter(requestId) {
@@ -2224,9 +2011,9 @@ function createStreamEmitter(requestId) {
 }
 
 function broadcastStatus() {
-  sendStatusToWindow(avatarWindow);
-  sendStatusToWindow(chatWindow);
-  sendStatusToWindow(canvasWindow);
+  sendStatusToWindow(wmGetAvatarWindow());
+  sendStatusToWindow(wmGetChatWindow());
+  sendStatusToWindow(wmGetCanvasWindow());
   sendCanvasState();
 }
 
@@ -2362,13 +2149,7 @@ function loadPersistentData() {
   workspaceState = readWorkspaceState();
 }
 
-function persistWindowStateNow() {
-  writeJsonFile(getWindowStatePath(), {
-    avatar: serializeWindowState(avatarWindow),
-    chat: serializeWindowState(chatWindow),
-    canvas: serializeWindowState(canvasWindow),
-  });
-}
+
 
 function schedulePersistWindowState() {
   if (persistWindowStateTimer) {
@@ -2378,7 +2159,7 @@ function schedulePersistWindowState() {
   persistWindowStateTimer = setTimeout(() => {
     persistWindowStateTimer = null;
     try {
-      persistWindowStateNow();
+      wmPersistWindowStateNow(app, wmGetAvatarWindow(), wmGetChatWindow(), wmGetCanvasWindow());
     } catch {
       // ignore persistence errors
     }
@@ -2404,38 +2185,24 @@ function applyAlwaysOnTop(targetWindow, target, enabled) {
 
 function setWindowAlwaysOnTop(target, enabled) {
   if (target === 'avatar') {
-    applyAlwaysOnTop(avatarWindow, target, enabled);
+    wmApplyAlwaysOnTop(wmGetAvatarWindow(), target, enabled);
   }
 
   if (target === 'chat') {
-    applyAlwaysOnTop(chatWindow, target, enabled);
+    wmApplyAlwaysOnTop(wmGetChatWindow(), target, enabled);
   }
 
   if (target === 'canvas') {
-    applyAlwaysOnTop(canvasWindow, target, enabled);
+    wmApplyAlwaysOnTop(wmGetCanvasWindow(), target, enabled);
   }
 
-  schedulePersistWindowState();
+  wmSchedulePersistWindowState(app, wmGetAvatarWindow(), wmGetChatWindow(), wmGetCanvasWindow());
   broadcastStatus();
 
   return {
     ok: true,
-    windowPrefs: getCurrentWindowPrefs(),
+    windowPrefs: wmGetCurrentWindowPrefs(wmGetAvatarWindow(), wmGetChatWindow(), wmGetCanvasWindow(), readJsonFile(getWindowStatePath(), {})),
   };
-}
-
-function normalizeCanvasLayout(layout) {
-  const value = String(layout || '').trim().toLowerCase();
-  const aliasMap = {
-    right: 'right-docked',
-    docked: 'right-docked',
-    'right-docked': 'right-docked',
-    split: 'split-50',
-    'split-50': 'split-50',
-    half: 'split-50',
-  };
-
-  return aliasMap[value] || 'right-docked';
 }
 
 function toFileHref(filePath) {
@@ -2445,11 +2212,6 @@ function toFileHref(filePath) {
     return '';
   }
 }
-
-// ============================================================
-// PinchTab service functions moved to browser-agent.js
-// Import from browser-agent module above
-// ============================================================
 
 // ============================================================
 // Pywinauto MCP service functions moved to computer-control.js
@@ -2495,333 +2257,6 @@ async function readPywinautoDesktopStateText(preferredState = computerState) {
   }
 }
 
-function normalizeBrowserUrl(urlLike = '') {
-  const input = String(urlLike || '').trim();
-  if (!input) return 'https://example.com';
-  if (/^https?:\/\//i.test(input) || /^about:/i.test(input)) return input;
-  if (/^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?$/i.test(input)) {
-    return `https://${input.replace(/^https?:\/\//i, '')}`;
-  }
-  return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
-}
-
-function buildBrowserTitleFromUrl(urlLike = '') {
-  try {
-    const parsed = new URL(normalizeBrowserUrl(urlLike));
-    return parsed.hostname.replace(/^www\./i, '') || 'Browser';
-  } catch {
-    return 'Browser';
-  }
-}
-
-function trimBrowserText(text, maxLength = 8000) {
-  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
-}
-
-function parsePinchtabSnapshotText(snapshotText = '') {
-  return String(snapshotText || '')
-    .split('\n')
-    .slice(1)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = line.match(/^([A-Za-z0-9_-]+):([^\s]+)\s*(.*)$/);
-      if (!match) {
-        return {
-          ref: '',
-          role: 'node',
-          label: line,
-        };
-      }
-
-      return {
-        ref: match[1],
-        role: match[2],
-        label: match[3] || match[2],
-      };
-    })
-    .slice(0, 40);
-}
-
-function getActiveBrowserSnapshotItem(ref = '') {
-  const targetRef = String(ref || '').trim();
-  if (!targetRef || canvasState.content?.type !== 'browser') {
-    return null;
-  }
-
-  return (canvasState.content.snapshotItems || []).find((item) => String(item?.ref || '').trim() === targetRef) || null;
-}
-
-function getBrowserSnapshotItemByRef(content = {}, ref = '') {
-  const targetRef = String(ref || '').trim();
-  if (!targetRef) {
-    return null;
-  }
-
-  return (content?.snapshotItems || []).find((item) => String(item?.ref || '').trim() === targetRef) || null;
-}
-
-function getBrowserComparableState(content = {}) {
-  return {
-    currentUrl: String(content?.currentUrl || content?.url || '').trim(),
-    pageTitle: String(content?.pageTitle || content?.title || '').trim(),
-    text: trimBrowserText(content?.text || '', 600),
-    snapshotText: String(content?.snapshotText || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
-  };
-}
-
-function didBrowserStateChange(beforeContent = {}, afterContent = {}) {
-  const before = getBrowserComparableState(beforeContent);
-  const after = getBrowserComparableState(afterContent);
-  return before.currentUrl !== after.currentUrl
-    || before.pageTitle !== after.pageTitle
-    || before.text !== after.text
-    || before.snapshotText !== after.snapshotText;
-}
-
-function didBrowserClickProgress(beforeContent = {}, afterContent = {}) {
-  const before = getBrowserComparableState(beforeContent);
-  const after = getBrowserComparableState(afterContent);
-  return before.currentUrl !== after.currentUrl
-    || before.pageTitle !== after.pageTitle
-    || before.text !== after.text;
-}
-
-function extractSnapshotItemLabelText(item = {}) {
-  const rawLabel = String(item?.label || '').replace(/\s+val="[^"]*"/gi, '').replace(/\s+/g, ' ').trim();
-  if (!rawLabel) {
-    return '';
-  }
-
-  const quotedMatch = rawLabel.match(/"([^"]+)"/);
-  if (quotedMatch?.[1]) {
-    return quotedMatch[1].trim();
-  }
-
-  return rawLabel.replace(/^[^A-Za-z0-9]+/, '').trim();
-}
-
-function extractSnapshotItemValue(item = {}) {
-  const rawLabel = String(item?.label || '');
-  const quotedValue = rawLabel.match(/\bval="([^"]*)"/i);
-  return quotedValue?.[1] ? quotedValue[1].trim() : '';
-}
-
-function isTextInputFallbackCandidate(item = {}) {
-  const role = String(item?.role || '').trim().toLowerCase();
-  return role.includes('textbox') || role.includes('searchbox');
-}
-
-function isClickFallbackCandidate(item = {}) {
-  const role = String(item?.role || '').trim().toLowerCase();
-  return role.includes('button') || role.includes('link');
-}
-
-async function refreshBrowserAfterAction(waitAfterMs = 1200) {
-  await sleep(Number(waitAfterMs || 1200));
-  return refreshBrowserCanvas({}, { navigate: false, showCanvas: false });
-}
-
-function buildClickFallbackExpression(item = {}) {
-  const targetLabel = extractSnapshotItemLabelText(item);
-  const targetRole = String(item?.role || '').trim().toLowerCase();
-  const roleSelector = targetRole.includes('link')
-    ? 'a,[role="link"]'
-    : 'button,[role="button"],input[type="button"],input[type="submit"]';
-
-  return `(() => {
-    const targetLabel = ${JSON.stringify(targetLabel)};
-    const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
-    const describe = (element) => normalize(
-      element?.innerText
-      || element?.textContent
-      || element?.getAttribute?.('aria-label')
-      || element?.value
-      || element?.title
-      || ''
-    );
-    const target = normalize(targetLabel);
-    const active = document.activeElement;
-    const activeText = describe(active);
-    const roleOk = active && active.matches && active.matches(${JSON.stringify(roleSelector)});
-
-    if (roleOk && (!target || activeText === target || activeText.includes(target) || target.includes(activeText))) {
-      active.click();
-      return { clicked: true, strategy: 'active-element', text: activeText };
-    }
-
-    const candidates = [...document.querySelectorAll(${JSON.stringify(roleSelector)})];
-    const exact = candidates.find((element) => {
-      const text = describe(element);
-      return target && text && (text === target || text.includes(target) || target.includes(text));
-    });
-    const fallback = exact || candidates.find((element) => {
-      const text = describe(element);
-      return !target && text;
-    });
-
-    if (!fallback) {
-      return { clicked: false, reason: 'no-match', targetLabel };
-    }
-
-    fallback.click();
-    return { clicked: true, strategy: 'selector-match', text: describe(fallback) };
-  })()`;
-}
-
-async function runBrowserClickFallbacks(ref, beforeContent, item, waitAfterMs) {
-  const browserTabId = String(beforeContent?.tabId || canvasState.content?.tabId || '').trim();
-  if (!ref || !isClickFallbackCandidate(item)) {
-    return null;
-  }
-
-  try {
-    await runPinchtabAction({
-      kind: 'focus',
-      ref,
-    }, browserTabId);
-    await sleep(250);
-    await runPinchtabAction({
-      kind: 'press',
-      key: 'Enter',
-    }, browserTabId);
-    const focusedRefresh = await refreshBrowserAfterAction(waitAfterMs);
-    if (didBrowserClickProgress(beforeContent, focusedRefresh.state?.content || {})) {
-      return {
-        ok: true,
-        recovered: true,
-        state: focusedRefresh.state,
-        clickFallback: 'focus-enter',
-        warning: 'Click ref non efficace. Fallback focus+Enter riuscito.',
-      };
-    }
-  } catch {
-    // ignore and try DOM click fallback
-  }
-
-  try {
-    await runPinchtabAction({
-      kind: 'focus',
-      ref,
-    }, browserTabId).catch(() => null);
-    await evaluatePinchtabExpression(buildClickFallbackExpression(item), browserTabId);
-    const evalRefresh = await refreshBrowserAfterAction(waitAfterMs);
-    if (didBrowserClickProgress(beforeContent, evalRefresh.state?.content || {})) {
-      return {
-        ok: true,
-        recovered: true,
-        state: evalRefresh.state,
-        clickFallback: 'eval-click',
-        warning: 'Click ref non efficace. Fallback DOM click riuscito.',
-      };
-    }
-  } catch {
-    // ignore and let caller return the latest state
-  }
-
-  return null;
-}
-
-function buildFindQueryFromSnapshotItem(item = {}, action = {}) {
-  const label = extractSnapshotItemLabelText(item);
-  const role = String(item?.role || '').trim();
-  const value = String(action?.value || action?.text || '').trim();
-  return [label, value, role].filter(Boolean).join(' ');
-}
-
-async function retryBrowserActionWithFind(action = {}, beforeContent = {}, item = {}, waitAfterMs = 1200) {
-  const browserTabId = String(beforeContent?.tabId || canvasState.content?.tabId || '').trim();
-  if (!browserTabId || !action.ref) {
-    return null;
-  }
-
-  const rematchedRef = await findPinchtabRef(buildFindQueryFromSnapshotItem(item, action), browserTabId);
-  if (!rematchedRef || rematchedRef === action.ref) {
-    return null;
-  }
-
-  await runPinchtabAction({
-    ...action,
-    ref: rematchedRef,
-  }, browserTabId);
-
-  const refreshed = await refreshBrowserAfterAction(waitAfterMs);
-  return {
-    ok: true,
-    recovered: true,
-    state: refreshed.state,
-    staleRef: true,
-    rematchedRef,
-    warning: `Ref browser aggiornato semanticamente da ${action.ref} a ${rematchedRef}.`,
-  };
-}
-
-async function runBrowserInputFallbacks(action = {}, beforeContent = {}, waitAfterMs = 1200) {
-  const browserTabId = String(beforeContent?.tabId || canvasState.content?.tabId || '').trim();
-  const targetItem = getBrowserSnapshotItemByRef(beforeContent, action.ref);
-  if (!browserTabId || action.kind !== 'type' || !action.ref || !action.text || !isTextInputFallbackCandidate(targetItem)) {
-    return null;
-  }
-
-  try {
-    await runPinchtabAction({
-      kind: 'fill',
-      ref: action.ref,
-      text: action.text,
-    }, browserTabId);
-
-    const refreshed = await refreshBrowserAfterAction(waitAfterMs);
-    const nextItem = getBrowserSnapshotItemByRef(refreshed.state?.content, action.ref);
-    if (extractSnapshotItemValue(nextItem) === action.text || didBrowserStateChange(beforeContent, refreshed.state?.content || {})) {
-      return {
-        ok: true,
-        recovered: true,
-        state: refreshed.state,
-        inputFallback: 'fill',
-        warning: 'Type ref non affidabile. Fallback fill riuscito.',
-      };
-    }
-  } catch {
-    // ignore fill fallback errors
-  }
-
-  return null;
-}
-
-function sanitizeBrowserActionText(text = '') {
-  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return '';
-  }
-
-  return normalized
-    .replace(/\b(?:enter|return|invio|tab|escape|esc|ctrl|control|alt|shift)\b/gi, ' ')
-    .replace(/[+]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function isYouTubeSearchRef(ref = '') {
-  const currentUrl = String(canvasState.content?.currentUrl || canvasState.content?.url || '').toLowerCase();
-  if (!currentUrl.includes('youtube.com')) {
-    return false;
-  }
-
-  const item = getActiveBrowserSnapshotItem(ref);
-  const label = String(item?.label || '').toLowerCase();
-  const role = String(item?.role || '').toLowerCase();
-
-  return role.includes('textbox')
-    || label.includes('search')
-    || label.includes('cerca')
-    || label.includes('ricerca');
-}
-
-function buildYouTubeSearchUrl(queryText = '') {
-  const query = sanitizeBrowserActionText(queryText);
-  return `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-}
-
 function inferCanvasContentTypeFromPath(filePath) {
   const ext = path.extname(filePath || '').toLowerCase();
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) return 'image';
@@ -2829,62 +2264,6 @@ function inferCanvasContentTypeFromPath(filePath) {
   if (['.mp3', '.wav', '.ogg', '.m4a', '.flac'].includes(ext)) return 'audio';
   if (['.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.xml', '.yml', '.yaml', '.log'].includes(ext)) return 'text';
   return 'file';
-}
-
-async function resolveBrowserCanvasContent(content = {}, options = {}) {
-  const browserUrl = normalizeBrowserUrl(content.url || content.currentUrl || content.value || '');
-  const browserTitle = String(content.title || '').trim() || buildBrowserTitleFromUrl(browserUrl);
-  try {
-    let tabState = null;
-    if (options.navigate !== false) {
-      tabState = await resolvePinchtabTabState(content, browserUrl, browserTitle);
-      if (tabState?.tabId) {
-        await pinchtabTabRequestJson(tabState.tabId, '/navigate', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: browserUrl }),
-        });
-      } else {
-        await pinchtabRequestJson('/navigate', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: browserUrl }),
-        });
-      }
-      await sleep(3000);
-      if (!PINCHTAB_HEADLESS) { focusPinchtabChromeWindow(getPinchtabProfilePath()); }
-    } else {
-      await ensurePinchtabService();
-    }
-    tabState = await resolvePinchtabTabState(content, browserUrl, browserTitle);
-    const activeTabId = tabState?.tabId || '';
-    const [textData, snapshotText, screenshotData, tabsData] = await Promise.all([
-      activeTabId ? pinchtabTabRequestJson(activeTabId, '/text') : pinchtabRequestJson('/text'),
-      (activeTabId ? pinchtabTabRequest(activeTabId, '/snapshot?filter=interactive&format=compact&maxTokens=1800') : pinchtabRequest('/snapshot?filter=interactive&format=compact&maxTokens=1800')).then((r) => r.text()),
-      activeTabId ? pinchtabTabRequestJson(activeTabId, '/screenshot') : pinchtabRequestJson('/screenshot'),
-      Promise.resolve({ tabs: tabState?.tabs || [] }),
-    ]);
-    return {
-      ...content, type: 'browser', title: browserTitle || 'Browser', url: browserUrl,
-      currentUrl: String(textData?.url || browserUrl).trim() || browserUrl,
-      pageTitle: String(textData?.title || browserTitle).trim() || browserTitle,
-      tabId: String(activeTabId || content.tabId || tabsData?.tabs?.[0]?.id || '').trim(),
-      tabs: Array.isArray(tabsData?.tabs) ? tabsData.tabs : [],
-      text: trimBrowserText(textData?.text || ''),
-      snapshotText: String(snapshotText || '').trim(),
-      snapshotItems: parsePinchtabSnapshotText(snapshotText),
-      screenshotSrc: screenshotData?.base64 ? `data:image/jpeg;base64,${screenshotData.base64}` : '',
-      status: 'ready', message: '', lastUpdatedAt: new Date().toISOString(),
-    };
-  } catch (error) {
-    return {
-      ...content, type: 'browser', title: browserTitle || 'Browser', url: browserUrl,
-      currentUrl: String(content.currentUrl || browserUrl).trim() || browserUrl,
-      pageTitle: String(content.pageTitle || browserTitle).trim(),
-      tabId: String(content.tabId || '').trim(),
-      tabs: Array.isArray(content.tabs) ? content.tabs : [],
-      text: String(content.text || ''), snapshotText: String(content.snapshotText || ''),
-      snapshotItems: Array.isArray(content.snapshotItems) ? content.snapshotItems : [],
-      screenshotSrc: String(content.screenshotSrc || ''),
-      status: 'error', message: error?.message || String(error), lastUpdatedAt: new Date().toISOString(),
-    };
-  }
 }
 
 async function buildCanvasContent(content = {}, options = {}) {
@@ -2913,7 +2292,7 @@ async function buildCanvasContent(content = {}, options = {}) {
   };
 
   if (normalized.type === 'browser') {
-    return resolveBrowserCanvasContent(normalized, options.browser || {});
+    return baResolveBrowserCanvasContent(normalized, options.browser || {});
   }
 
   if (normalized.path) {
@@ -2997,129 +2376,23 @@ async function refreshBrowserCanvas(overrides = {}, options = {}) {
   };
 }
 
-function isPinchtabRecoverableActionError(error) {
-  const message = String(error?.message || error || '').toLowerCase();
-  return (
-    (message.includes('ref ') && message.includes('not found') && message.includes('/snapshot'))
-    || (message.includes('no node found for given backend id') && message.includes('-32000'))
-    || (message.includes('backend id') && message.includes('not found'))
-    || (message.includes('element is not focusable') && message.includes('-32000'))
-  );
-}
-
-async function performBrowserAction(payload = {}) {
-  const kind = String(payload.kind || '').trim().toLowerCase();
-  if (!kind) {
-    return { ok: false, error: 'Missing browser action kind' };
+async function navigateBrowserCanvas(overrides = {}) {
+  if (canvasState.isOpen) {
+    closeCanvas();
   }
 
-  const beforeContent = canvasState.content?.type === 'browser'
-    ? { ...canvasState.content }
-    : {};
-  const browserTabId = String(payload.tabId || beforeContent.tabId || canvasState.content?.tabId || '').trim();
-  const action = { kind };
-  if (payload.ref) action.ref = String(payload.ref).trim();
-  if (payload.text != null) action.text = sanitizeBrowserActionText(payload.text);
-  if (payload.value != null) action.value = sanitizeBrowserActionText(payload.value);
-  if (payload.key) action.key = String(payload.key).trim();
-  if (Object.prototype.hasOwnProperty.call(payload, 'waitNav')) {
-    action.waitNav = Boolean(payload.waitNav);
-  }
+  const result = await refreshBrowserCanvas({
+    ...(canvasState.content?.type === 'browser' ? canvasState.content : {}),
+    type: 'browser',
+    ...overrides,
+  }, { navigate: true, showCanvas: false });
 
-  if (['click', 'type', 'focus', 'hover', 'scroll', 'select'].includes(kind) && !action.ref) {
-    return { ok: false, error: 'Browser action requires a ref' };
-  }
-
-  if ((kind === 'type' || kind === 'fill') && !action.text) {
-    return { ok: false, error: 'Browser typing requires text' };
-  }
-
-  if (kind === 'select') {
-    action.value = action.value || action.text || '';
-    delete action.text;
-    if (!action.value) {
-      return { ok: false, error: 'Browser select requires value' };
-    }
-  }
-
-  if (kind === 'press' && !action.key) {
-    action.key = 'Enter';
-  }
-
-  if (['type', 'fill'].includes(kind) && action.ref && action.text && isYouTubeSearchRef(action.ref)) {
-    return refreshBrowserCanvas({
-      ...(canvasState.content?.type === 'browser' ? canvasState.content : {}),
-      type: 'browser',
-      title: 'youtube.com',
-      url: buildYouTubeSearchUrl(action.text),
-    }, { navigate: true, showCanvas: false });
-  }
-
-  const targetSnapshotItem = action.ref ? getActiveBrowserSnapshotItem(action.ref) : null;
-
-  try {
-    await runPinchtabAction(action, browserTabId);
-
-    const refreshed = await refreshBrowserAfterAction(payload.waitAfterMs);
-    if (kind === 'type' && action.ref && action.text) {
-      const typedItem = getBrowserSnapshotItemByRef(refreshed.state?.content, action.ref);
-      if (extractSnapshotItemValue(typedItem) !== action.text) {
-        const inputFallbackResult = await runBrowserInputFallbacks(action, beforeContent, payload.waitAfterMs);
-        if (inputFallbackResult) {
-          return inputFallbackResult;
-        }
-      }
-    }
-    if (kind === 'click' && action.ref && isClickFallbackCandidate(targetSnapshotItem)
-      && !didBrowserClickProgress(beforeContent, refreshed.state?.content || {})) {
-      const fallbackResult = await runBrowserClickFallbacks(
-        action.ref,
-        beforeContent,
-        targetSnapshotItem,
-        payload.waitAfterMs,
-      );
-      if (fallbackResult) {
-        return fallbackResult;
-      }
-    }
-
-    return refreshed;
-  } catch (error) {
-    if (action.ref && targetSnapshotItem) {
-      const rematchResult = await retryBrowserActionWithFind(action, beforeContent, targetSnapshotItem, payload.waitAfterMs).catch(() => null);
-      if (rematchResult) {
-        return rematchResult;
-      }
-    }
-
-    if (kind === 'click' && action.ref && isClickFallbackCandidate(targetSnapshotItem)) {
-      const fallbackResult = await runBrowserClickFallbacks(
-        action.ref,
-        beforeContent,
-        targetSnapshotItem,
-        payload.waitAfterMs,
-      );
-      if (fallbackResult) {
-        return fallbackResult;
-      }
-    }
-
-    if (isPinchtabRecoverableActionError(error)) {
-      const refreshed = await refreshBrowserCanvas({}, { navigate: false, showCanvas: false });
-      return {
-        ok: true,
-        recovered: true,
-        state: refreshed.state,
-        staleRef: true,
-        warning: 'Azione browser non piu valida sul DOM corrente. Snapshot aggiornata e loop ripreso.',
-      };
-    }
-
-    return {
-      ok: false,
-      error: error?.message || String(error),
-    };
-  }
+  const browserContent = result?.state?.content || canvasState.content;
+  return {
+    ok: browserContent?.status !== 'error',
+    state: result?.state || canvasState,
+    error: browserContent?.status === 'error' ? browserContent.message : null,
+  };
 }
 
 function updateCanvasState(patch = {}) {
@@ -3133,64 +2406,25 @@ function updateCanvasState(patch = {}) {
   broadcastStatus();
 }
 
-function getCanvasBoundsForLayout(layout, avatarBounds) {
-  const avatar = avatarBounds || avatarWindow?.getBounds() || getWindowLayout(screen.getPrimaryDisplay().id).avatar;
-  const workArea = getDisplayById(screen.getDisplayMatching(avatar).id).workArea;
-  const gap = 16;
 
-  if (layout === 'split-50') {
-    const halfWidth = Math.max(480, Math.floor(workArea.width / 2));
-    return {
-      avatar: {
-        x: workArea.x,
-        y: workArea.y,
-        width: halfWidth,
-        height: workArea.height,
-      },
-      canvas: {
-        x: workArea.x + halfWidth,
-        y: workArea.y,
-        width: Math.max(480, workArea.width - halfWidth),
-        height: workArea.height,
-      },
-    };
-  }
-
-  const preferredWidth = Math.min(DEFAULT_CANVAS_WIDTH, Math.max(420, Math.floor(workArea.width * 0.3)));
-  let x = avatar.x + avatar.width + gap;
-  let width = preferredWidth;
-
-  if (x + width > workArea.x + workArea.width - gap) {
-    width = Math.max(420, Math.floor(workArea.width * 0.32));
-    x = workArea.x + workArea.width - width - gap;
-  }
-
-  return {
-    avatar,
-    canvas: {
-      x,
-      y: Math.max(workArea.y + gap, avatar.y),
-      width,
-      height: Math.min(workArea.height - gap * 2, avatar.height),
-    },
-  };
-}
 
 function syncCanvasToAvatar(layout = canvasState.layout) {
-  if (!canvasWindow || canvasWindow.isDestroyed()) return;
-  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  const canvasWin = wmGetCanvasWindow();
+  const avatarWin = wmGetAvatarWindow();
+  if (!canvasWin || canvasWin.isDestroyed()) return;
+  if (!avatarWin || avatarWin.isDestroyed()) return;
   if (!canvasState.isOpen) return;
 
-  const normalizedLayout = normalizeCanvasLayout(layout);
-  const nextBounds = getCanvasBoundsForLayout(normalizedLayout, avatarWindow.getBounds());
+  const normalizedLayout = baNormalizeCanvasLayout(layout);
+  const nextBounds = wmGetCanvasBoundsForLayout(normalizedLayout, avatarWin.getBounds());
 
   if (normalizedLayout === 'split-50') {
-    avatarWindow.setBounds(nextBounds.avatar);
-  } else if (canvasState.lastAvatarBoundsBeforeSplit && avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWin.setBounds(nextBounds.avatar);
+  } else if (canvasState.lastAvatarBoundsBeforeSplit && avatarWin && !avatarWin.isDestroyed()) {
     canvasState.lastAvatarBoundsBeforeSplit = null;
   }
 
-  canvasWindow.setBounds(nextBounds.canvas);
+  canvasWin.setBounds(nextBounds.canvas);
 }
 
 async function openCanvas(options = {}) {
@@ -3199,27 +2433,30 @@ async function openCanvas(options = {}) {
       isOpen: false,
       lastAvatarBoundsBeforeSplit: null,
     });
-    if (canvasWindow && !canvasWindow.isDestroyed()) {
-      canvasWindow.hide();
+    const canvasWin = wmGetCanvasWindow();
+    if (canvasWin && !canvasWin.isDestroyed()) {
+      canvasWin.hide();
     }
     return { ok: true, disabled: true, state: canvasState };
   }
 
-  const layout = normalizeCanvasLayout(options.layout || canvasState.layout);
+  const layout = baNormalizeCanvasLayout(options.layout || canvasState.layout);
   const content = await buildCanvasContent(options.content || canvasState.content || {}, options.buildOptions || {});
   const wasOpen = canvasState.isOpen;
+  ensureWindows();
+  let avatarWin = wmGetAvatarWindow();
 
-  if (!canvasWindow || canvasWindow.isDestroyed()) {
-    createCanvasWindow();
+  if (!avatarWin || avatarWin.isDestroyed()) {
+    return { ok: false, error: 'Avatar window non disponibile' };
   }
 
-  if (canvasState.layout === 'split-50' && layout !== 'split-50' && canvasState.lastAvatarBoundsBeforeSplit && avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.setBounds(canvasState.lastAvatarBoundsBeforeSplit);
+  if (canvasState.layout === 'split-50' && layout !== 'split-50' && canvasState.lastAvatarBoundsBeforeSplit && avatarWin && !avatarWin.isDestroyed()) {
+    avatarWin.setBounds(canvasState.lastAvatarBoundsBeforeSplit);
     canvasState.lastAvatarBoundsBeforeSplit = null;
   }
 
-  if (layout === 'split-50' && avatarWindow && !avatarWindow.isDestroyed() && !canvasState.lastAvatarBoundsBeforeSplit) {
-    canvasState.lastAvatarBoundsBeforeSplit = avatarWindow.getBounds();
+  if (layout === 'split-50' && avatarWin && !avatarWin.isDestroyed() && !canvasState.lastAvatarBoundsBeforeSplit) {
+    canvasState.lastAvatarBoundsBeforeSplit = avatarWin.getBounds();
   }
 
   updateCanvasState({
@@ -3229,23 +2466,34 @@ async function openCanvas(options = {}) {
     lastAvatarBoundsBeforeSplit: canvasState.lastAvatarBoundsBeforeSplit,
   });
 
-  syncCanvasToAvatar(layout);
-  applyAlwaysOnTop(canvasWindow, 'canvas', getCurrentWindowPrefs().canvasAlwaysOnTop);
+  ensureWindows();
+  const canvasWin = wmGetCanvasWindow();
+  avatarWin = wmGetAvatarWindow();
+  const chatWin = wmGetChatWindow();
 
-  if (!wasOpen) {
-    canvasWindow.show();
-  } else {
-    canvasWindow.showInactive();
+  if (!canvasWin || canvasWin.isDestroyed()) {
+    return { ok: false, error: 'Canvas window non disponibile' };
   }
 
-  canvasWindow.focus();
+  syncCanvasToAvatar(layout);
+  wmApplyAlwaysOnTop(canvasWin, 'canvas', wmGetCurrentWindowPrefs(avatarWin, chatWin, canvasWin, {}).canvasAlwaysOnTop);
+
+  if (!wasOpen) {
+    canvasWin.show();
+  } else {
+    canvasWin.showInactive();
+  }
+
+  canvasWin.focus();
 
   return { ok: true, state: canvasState };
 }
 
 function closeCanvas() {
-  if (canvasState.layout === 'split-50' && canvasState.lastAvatarBoundsBeforeSplit && avatarWindow && !avatarWindow.isDestroyed()) {
-    avatarWindow.setBounds(canvasState.lastAvatarBoundsBeforeSplit);
+  const avatarWin = wmGetAvatarWindow();
+  const canvasWin = wmGetCanvasWindow();
+  if (canvasState.layout === 'split-50' && canvasState.lastAvatarBoundsBeforeSplit && avatarWin && !avatarWin.isDestroyed()) {
+    avatarWin.setBounds(canvasState.lastAvatarBoundsBeforeSplit);
   }
 
   updateCanvasState({
@@ -3253,8 +2501,8 @@ function closeCanvas() {
     lastAvatarBoundsBeforeSplit: null,
   });
 
-  if (canvasWindow && !canvasWindow.isDestroyed()) {
-    canvasWindow.hide();
+  if (canvasWin && !canvasWin.isDestroyed()) {
+    canvasWin.hide();
   }
 
   return { ok: true, state: canvasState };
@@ -3295,30 +2543,17 @@ async function handleBrowserDirective(directive = {}) {
 
   if (['open', 'show', 'navigate'].includes(action)) {
     const targetUrl = directive.url || directive.value || canvasState.content?.currentUrl || canvasState.content?.url || '';
-    if (canvasState.isOpen) {
-      closeCanvas();
-    }
-
-    const result = await refreshBrowserCanvas({
-      ...(canvasState.content?.type === 'browser' ? canvasState.content : {}),
-      type: 'browser',
-      title: directive.title || buildBrowserTitleFromUrl(targetUrl),
+    return navigateBrowserCanvas({
+      title: directive.title || baBuildBrowserTitleFromUrl(targetUrl),
       url: targetUrl,
-    }, { navigate: true, showCanvas: false });
-
-    const browserContent = result?.state?.content || canvasState.content;
-    return {
-      ok: browserContent?.status !== 'error',
-      state: result?.state || canvasState,
-      error: browserContent?.status === 'error' ? browserContent.message : null,
-    };
+    });
   }
 
   if (action === 'refresh') {
     return refreshBrowserCanvas({}, { navigate: false, showCanvas: false });
   }
 
-  return performBrowserAction({
+  return baPerformBrowserAction({
     kind: directive.kind || action,
     ref: directive.ref,
     text: directive.text,
@@ -3326,7 +2561,7 @@ async function handleBrowserDirective(directive = {}) {
     key: directive.key,
     waitNav: directive.waitNav,
     waitAfterMs: directive.waitAfterMs,
-  });
+  }, canvasState, refreshBrowserCanvas);
 }
 
 function updateComputerState(patch = {}) {
@@ -4736,37 +3971,40 @@ function appendTtsServiceLog(chunk, source) {
   ttsServiceLogTail = `${ttsServiceLogTail}\n${line}`.trim().slice(-12000);
 }
 
-function getTtsProviderDisplayName() {
-  return `Kokoro (${KOKORO_SPEAKER})`;
-}
+const ttsService = new TtsService({
+  url: KOKORO_URL,
+  port: KOKORO_PORT,
+  speaker: KOKORO_SPEAKER,
+  python: KOKORO_PYTHON,
+  script: KOKORO_SERVER_SCRIPT,
+  startupTimeout: KOKORO_STARTUP_TIMEOUT_MS,
+  onStatusChange: (status, payload) => {
+    if (status === 'ready') {
+      setTtsState('ready', {
+        latencyMs: payload && typeof payload === 'object' ? payload.latencyMs ?? null : null,
+        error: null,
+      });
+      return;
+    }
+    if (status === 'loading') {
+      setTtsState('loading', { error: null });
+      return;
+    }
+    if (status === 'error') {
+      ttsServiceLogTail = ttsService.getLogTail();
+      setTtsState('error', {
+        error: typeof payload === 'string' ? payload : String(payload || 'Kokoro error'),
+      });
+      return;
+    }
+    if (status === 'idle') {
+      setTtsState('idle', { error: null });
+    }
+  },
+});
 
-function getTtsServiceConfig() {
-  return {
-    id: 'kokoro',
-    name: 'Kokoro',
-    url: KOKORO_URL,
-    command: KOKORO_PYTHON,
-    args: ['-u', KOKORO_SERVER_SCRIPT],
-    startupTimeoutMs: KOKORO_STARTUP_TIMEOUT_MS,
-    validate() {
-      if (!fs.existsSync(KOKORO_SERVER_SCRIPT)) {
-        throw new Error(`Kokoro server script not found: ${KOKORO_SERVER_SCRIPT}`);
-      }
-    },
-    env: {
-      ...process.env,
-      KOKORO_HOST,
-      KOKORO_PORT: String(KOKORO_PORT),
-      KOKORO_DEFAULT_SPEAKER: KOKORO_SPEAKER,
-      KOKORO_PYTHON,
-    },
-    requestBody(text) {
-      return {
-        text,
-        voice: KOKORO_SPEAKER,
-      };
-    },
-  };
+function getTtsProviderDisplayName() {
+  return ttsService.getProviderDisplayName();
 }
 
 async function sleep(ms) {
@@ -4776,9 +4014,8 @@ async function sleep(ms) {
 }
 
 async function probeTtsHealth() {
-  const config = getTtsServiceConfig();
   try {
-    const response = await fetch(`${config.url}/health`);
+    const response = await fetch(`${KOKORO_URL}/health`);
     if (!response.ok) return null;
     const data = await response.json();
     return data?.ready ? data : null;
@@ -4788,110 +4025,54 @@ async function probeTtsHealth() {
 }
 
 function stopTtsService() {
-  if (!ttsServiceProcess) return;
-
-  try {
-    ttsServiceProcess.kill();
-  } catch {
-    // ignore kill errors
+  if (ttsWarmupTimer) {
+    clearTimeout(ttsWarmupTimer);
+    ttsWarmupTimer = null;
   }
-
-  ttsServiceProcess = null;
+  ttsService.stop();
+  ttsServiceLogTail = ttsService.getLogTail();
 }
 
 async function ensureTtsService() {
-  const config = getTtsServiceConfig();
-  const healthy = await probeTtsHealth();
-  if (healthy) {
-    setTtsState('ready', { error: null });
-    return healthy;
-  }
-
-  if (ttsServiceStartupPromise) {
-    return ttsServiceStartupPromise;
-  }
-
-  ttsServiceStartupPromise = (async () => {
-    setTtsState('loading', { error: null });
-    ttsServiceLogTail = '';
-    config.validate();
-
-    if (!ttsServiceProcess || ttsServiceProcess.killed) {
-      ttsServiceProcess = spawn(config.command, config.args, {
-        cwd: path.join(__dirname, '..'),
-        windowsHide: true,
-        env: config.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      ttsServiceProcess.stdout.on('data', (chunk) => {
-        appendTtsServiceLog(chunk, 'stdout');
-      });
-      ttsServiceProcess.stderr.on('data', (chunk) => {
-        appendTtsServiceLog(chunk, 'stderr');
-      });
-      ttsServiceProcess.on('exit', (code, signal) => {
-        appendTtsServiceLog(`process exited code=${code} signal=${signal}`, 'exit');
-        ttsServiceProcess = null;
-      });
-      ttsServiceProcess.on('error', (error) => {
-        appendTtsServiceLog(error.message, 'spawn-error');
-      });
-    }
-
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < config.startupTimeoutMs) {
-      const data = await probeTtsHealth();
-      if (data) {
-        setTtsState('ready', { error: null });
-        return data;
-      }
-
-      if (!ttsServiceProcess) {
-        throw new Error(`${config.name} service exited before becoming ready.\n${ttsServiceLogTail}`);
-      }
-
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(1000);
-    }
-
-    throw new Error(`${config.name} startup timeout after ${config.startupTimeoutMs} ms.\n${ttsServiceLogTail}`);
-  })();
-
   try {
-    return await ttsServiceStartupPromise;
-  } finally {
-    ttsServiceStartupPromise = null;
+    const result = await ttsService.ensure();
+    ttsServiceLogTail = ttsService.getLogTail();
+    return result;
+  } catch (error) {
+    ttsServiceLogTail = ttsService.getLogTail();
+    throw error;
   }
+}
+
+function isTtsUnavailableError(error) {
+  const message = String(error?.message || error || '').trim();
+  if (!message) return false;
+  return (
+    message.includes('Kokoro Python not found:')
+    || message.includes('No usable Python launcher found for Kokoro TTS')
+    || message.includes('Kokoro server script not found:')
+  );
 }
 
 async function synthesizeSpeechToBase64(text) {
   const safeText = String(text || '').trim();
   if (!safeText) return null;
 
-  const startedAt = Date.now();
-  const config = getTtsServiceConfig();
-  setTtsState('loading', { error: null });
-  await ensureTtsService();
-
-  const response = await fetch(`${config.url}/synthesize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(config.requestBody(safeText)),
-  });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data?.audio_base64) {
-    const errorMessage = data?.detail || `${config.name} synth failed with status ${response.status}`;
-    setTtsState('error', { error: errorMessage });
-    throw new Error(errorMessage);
+  try {
+    const audioBase64 = await ttsService.synthesize(safeText);
+    ttsServiceLogTail = ttsService.getLogTail();
+    return audioBase64;
+  } catch (error) {
+    if (isTtsUnavailableError(error)) {
+      setTtsState('idle', {
+        error: null,
+        latencyMs: null,
+      });
+      return null;
+    }
+    ttsServiceLogTail = ttsService.getLogTail();
+    throw error;
   }
-
-  setTtsState('ready', {
-    latencyMs: Date.now() - startedAt,
-    error: null,
-  });
-  return data.audio_base64;
 }
 
 function normalizeEmotion(value, fallback = 'neutral') {
@@ -4978,15 +4159,76 @@ function normalizeGesture(value) {
     stand: 'straight',
     sit: 'sitting',
     seated: 'sitting',
+    seated_down: 'sitting',
+    sitting_down: 'sitting',
+    seduta: 'sitting',
+    seduto: 'sitting',
+    siediti: 'sitting',
+    siedi: 'sitting',
+    accucciata: 'bend',
+    accucciato: 'bend',
+    rannicchiata: 'bend',
+    rannicchiato: 'bend',
+    rannicchiarsi: 'bend',
+    rannicchiati: 'bend',
+    piegata: 'bend',
+    piegato: 'bend',
+    chinata: 'bend',
+    chinato: 'bend',
+    curva: 'bend',
+    curvo: 'bend',
+    dancing: 'dance',
+    balla: 'dance',
+    ballerina: 'dance',
     thanks: 'namaste',
   };
 
   return aliasMap[gesture.toLowerCase()] || gesture.toLowerCase();
 }
 
+function normalizeAvatarHand(value) {
+  const hand = String(value || '').trim().toLowerCase();
+  if (!hand || ['null', 'none'].includes(hand)) {
+    return null;
+  }
+
+  const aliasMap = {
+    sx: 'left',
+    sinistra: 'left',
+    left: 'left',
+    dx: 'right',
+    destra: 'right',
+    right: 'right',
+    both: 'both',
+    entrambe: 'both',
+    tutte: 'both',
+    all: 'both',
+  };
+
+  return aliasMap[hand] || null;
+}
+
+function normalizeAvatarDirection(value, fallback = null) {
+  const direction = String(value || '').trim().toLowerCase();
+  if (!direction || ['null', 'none'].includes(direction)) {
+    return fallback;
+  }
+
+  const aliasMap = {
+    sx: 'left',
+    sinistra: 'left',
+    left: 'left',
+    dx: 'right',
+    destra: 'right',
+    right: 'right',
+  };
+
+  return aliasMap[direction] || fallback;
+}
+
 const AVATAR_GESTURES = new Set(['handup', 'ok', 'index', 'thumbup', 'thumbdown', 'side', 'shrug', 'namaste']);
 const AVATAR_POSES = new Set(['straight', 'side', 'hip', 'turn', 'back', 'wide', 'oneknee', 'kneel', 'bend', 'sitting', 'dance']);
-const AVATAR_ANIMATIONS = new Set(['walking']);
+const AVATAR_ANIMATIONS = new Set(['walking', 'turnwalk']);
 const AVATAR_EMOJIS = new Set(['😀','😃','😄','😁','😆','😅','😂','🤣','😊','😇','🙂','🙃','😉','😌','😍','🥰','😘','😗','😙','😚','😋','😛','😝','😜','🤪','🤨','🧐','🤓','😎','🥸','🤩','🥳','😏','😒','😞','😔','😟','😕','🙁','☹️','😣','😖','😫','😩','🥺','😢','😭','😤','😠','😡','🤬','🤯','😳','🥵','🥶','😱','😨','😰','😥','😓','🤗','🤔','🫡','🤭','🫢','🫣','🤫','🤥','😶','🫥','😐','😑','😬','🙄','😯','😦','😧','😮','😲','🥱','😴','🤤','😪','😵','🤐','🥴','🤢','🤮','🤧','😷','🤒','🤕','🤑','🤠','👿','👹','👺','🤡','💩','👻','💀','☠️','👽','👾','🤖','😺','😸','😹','😻','😼','😽','🙀','😿','😾','👋','🤚','🖐️','✋','🖖','🫱','🫲','🫳','🫴','👌','🤌','🤏','✌️','🤞','🫰','🤟','🤘','🤙','👈','👉','👆','🖕','👇','☝️','🫵','👍','👎','✊','👊','🤛','🤜','👏','🙌','🫶','👐','🤲','🤝','🙏']);
 
 function findAssetKey(value, collection) {
@@ -5073,29 +4315,76 @@ function extractExplicitMotion(input) {
   const animationSpecified = Object.prototype.hasOwnProperty.call(source, 'animation');
   const gestureSpecified = Object.prototype.hasOwnProperty.call(source, 'gesture');
   const motionSpecified = Object.prototype.hasOwnProperty.call(source, 'motion') || Object.prototype.hasOwnProperty.call(source, 'action');
+  const gestureHand = normalizeAvatarHand(source.hand || source.gestureHand || source.side || source.gestureSide);
+  const direction = normalizeAvatarDirection(source.direction || source.motionDirection || source.moveDirection, null);
+  let pose = null;
+  let animation = null;
+  let gesture = null;
+  let motion = null;
+  let motionType = null;
+  let hasExplicitMotion = false;
 
   if (poseSpecified) {
     const resolved = resolveAvatarMotion(source.pose, 'pose');
-    return { ...resolved, motionSpecified: true };
+    hasExplicitMotion = true;
+    if (resolved.motionType === 'pose') {
+      pose = resolved.motion;
+      if (!motion) {
+        motion = resolved.motion;
+        motionType = resolved.motionType;
+      }
+    }
   }
 
   if (animationSpecified) {
     const resolved = resolveAvatarMotion(source.animation, 'animation');
-    return { ...resolved, motionSpecified: true };
+    hasExplicitMotion = true;
+    if (resolved.motionType === 'animation') {
+      animation = resolved.motion;
+      if (!motion) {
+        motion = resolved.motion;
+        motionType = resolved.motionType;
+      }
+    }
   }
 
   if (gestureSpecified) {
     const resolved = resolveAvatarMotion(source.gesture, 'gesture');
-    return { ...resolved, motionSpecified: true };
+    hasExplicitMotion = true;
+    if (resolved.motionType === 'gesture') {
+      gesture = resolved.motion;
+      motion = resolved.motion;
+      motionType = resolved.motionType;
+    }
   }
 
   if (motionSpecified) {
     const preferredType = typeof source.motionType === 'string' ? source.motionType : null;
     const resolved = resolveAvatarMotion(source.motion || source.action, preferredType);
-    return { ...resolved, motionSpecified: true };
+    hasExplicitMotion = true;
+    if (resolved.motionType === 'pose') {
+      pose = resolved.motion;
+    } else if (resolved.motionType === 'animation') {
+      animation = resolved.motion;
+    } else if (resolved.motionType === 'gesture') {
+      gesture = resolved.motion;
+    }
+    if (resolved.motion) {
+      motion = resolved.motion;
+      motionType = resolved.motionType;
+    }
   }
 
-  return { motion: null, motionType: null, motionSpecified: false };
+  return {
+    pose,
+    animation,
+    gesture,
+    gestureHand,
+    direction,
+    motion,
+    motionType,
+    motionSpecified: hasExplicitMotion,
+  };
 }
 
 function clampIntensity(value, fallback = 0.72) {
@@ -5107,6 +4396,11 @@ function clampIntensity(value, fallback = 0.72) {
 function inferAvatarReaction(text) {
   const input = String(text || '').toLowerCase();
   const hasAny = (...words) => words.some((word) => input.includes(word));
+  const inferredDirection = hasAny('sinistra', 'verso sinistra', 'a sinistra', 'left')
+    ? 'left'
+    : hasAny('destra', 'verso destra', 'a destra', 'right')
+      ? 'right'
+      : null;
 
   const emojiEmotion = resolveEmotionFromEmoji(text);
   if (emojiEmotion && emojiEmotion !== 'neutral') {
@@ -5114,11 +4408,21 @@ function inferAvatarReaction(text) {
     return { emotion: emojiEmotion, motion: style.motion, motionType: style.motionType, expression: style.expression, intensity: 0.72 };
   }
 
-  if (hasAny('balla', 'ballare', 'dance', 'festa', 'festegg')) {
+  if (hasAny('balla', 'ballare', 'dance', 'dancing', 'festa', 'festegg', 'celebra', 'esulta', 'euforia')) {
     return { emotion: 'happy', motion: 'dance', motionType: 'pose', expression: 'happy', intensity: 0.9 };
   }
 
   if (hasAny('cammina', 'walk', 'andiamo', 'guidami', 'mostrami')) {
+    if (inferredDirection) {
+      return {
+        emotion: 'curious',
+        motion: 'turnwalk',
+        motionType: 'animation',
+        direction: inferredDirection,
+        expression: 'think',
+        intensity: 0.66,
+      };
+    }
     return { emotion: 'curious', motion: 'walking', motionType: 'animation', expression: 'think', intensity: 0.66 };
   }
 
@@ -5146,8 +4450,12 @@ function inferAvatarReaction(text) {
     return { emotion: 'sad', motion: 'oneknee', motionType: 'pose', expression: 'sad', intensity: 0.64 };
   }
 
-  if (hasAny('piegati', 'chinati', 'bend')) {
+  if (hasAny('piegati', 'piegata', 'piegato', 'chinati', 'chinata', 'chinato', 'bend', 'rannicchia', 'rannicchiati', 'rannicchiata', 'rannicchiato', 'accucciati', 'accucciata', 'accucciato', 'curvati', 'curvata', 'curvato')) {
     return { emotion: 'awkward', motion: 'bend', motionType: 'pose', expression: 'neutral', intensity: 0.52 };
+  }
+
+  if (hasAny('seduta', 'seduto', 'siediti', 'siedi', 'sit', 'sitting', 'riposa', 'riposati', 'rilassati')) {
+    return { emotion: 'neutral', motion: 'sitting', motionType: 'pose', expression: 'neutral', intensity: 0.54 };
   }
 
   if (hasAny('grazie', 'thank')) {
@@ -5277,6 +4585,11 @@ function parseActPayload(payloadText, fallbackText = '') {
     return {
       emotion: normalizeEmotion(emotionValue, fallback.emotion),
       intensity: clampIntensity(intensityValue, fallback.intensity),
+      pose: explicitMotion.pose,
+      animation: explicitMotion.animation,
+      gesture: resolvedGesture && explicitMotion.motionType === 'gesture' ? resolvedGesture : explicitMotion.gesture,
+      gestureHand: explicitMotion.gestureHand,
+      direction: explicitMotion.direction,
       motion: resolvedGesture || explicitMotion.motion,
       motionType: resolvedGesture ? 'gesture' : explicitMotion.motionType,
       expression: normalizeExpression(expressionHint, emotionValue || 'neutral'),
@@ -5292,6 +4605,7 @@ function parseActPayload(payloadText, fallbackText = '') {
     const looseAnimation = readLooseActField(source, ['animation']);
     const looseGesture = readLooseActField(source, ['gesture']);
     const looseMotion = readLooseActField(source, ['motion', 'action']);
+    const looseDirection = readLooseActField(source, ['direction']);
     const looseExpression = readLooseActField(source, ['expression', 'mood']);
     const looseCognitive = readLooseActField(source, ['cognitive']);
     const looseIntent = readLooseActField(source, ['intent']);
@@ -5302,6 +4616,7 @@ function parseActPayload(payloadText, fallbackText = '') {
       animation: looseAnimation || undefined,
       gesture: looseGesture || undefined,
       motion: looseMotion || undefined,
+      direction: looseDirection || undefined,
     });
 
     const sequentialMoods = parseSequentialMoods(looseEmotion);
@@ -5316,6 +4631,11 @@ function parseActPayload(payloadText, fallbackText = '') {
     return {
       emotion: normalizeEmotion(looseEmotion, fallback.emotion),
       intensity: clampIntensity(looseIntensity, fallback.intensity),
+      pose: explicitMotion.pose,
+      animation: explicitMotion.animation,
+      gesture: resolvedGesture && explicitMotion.motionType === 'gesture' ? resolvedGesture : explicitMotion.gesture,
+      gestureHand: explicitMotion.gestureHand,
+      direction: explicitMotion.direction,
       motion: resolvedGesture || explicitMotion.motion,
       motionType: resolvedGesture ? 'gesture' : explicitMotion.motionType,
       expression: normalizeExpression(expressionHint, looseEmotion || 'neutral'),
@@ -5344,6 +4664,10 @@ function parseSingleActAction(action, fallback) {
   return {
     emotion: normalizeEmotion(emotionValue, 'neutral'),
     intensity: clampIntensity(intensityValue, 0.72),
+    pose: explicitMotion.pose,
+    animation: explicitMotion.animation,
+    gesture: explicitMotion.gesture,
+    gestureHand: explicitMotion.gestureHand,
     motion: explicitMotion.motion,
     motionType: explicitMotion.motionType,
     expression: normalizeExpression(action?.expression, emotionValue || 'neutral'),
@@ -5356,7 +4680,7 @@ function parseCanvasPayload(payloadText) {
   if (!payload || typeof payload !== 'object') return null;
 
   const action = String(payload.action || 'open').trim().toLowerCase() || 'open';
-  const layout = normalizeCanvasLayout(payload.layout || payload.mode || canvasState.layout);
+  const layout = baNormalizeCanvasLayout(payload.layout || payload.mode || canvasState.layout);
   const title = String(payload.title || payload.content?.title || 'Canvas').trim() || 'Canvas';
 
   return {
@@ -5378,7 +4702,7 @@ function parseBrowserPayload(payloadText) {
   if (!payload || typeof payload !== 'object') return null;
 
   const action = String(payload.action || payload.kind || 'refresh').trim().toLowerCase() || 'refresh';
-  const layout = normalizeCanvasLayout(payload.layout || payload.mode || canvasState.layout);
+  const layout = baNormalizeCanvasLayout(payload.layout || payload.mode || canvasState.layout);
 
   return {
     action,
@@ -5862,8 +5186,8 @@ function inferBrowserDirectiveFromUserInput(userText, sequence = []) {
   const targetUrl = extractedUrl || input;
   return {
     action: 'open',
-    layout: normalizeCanvasLayout('right-docked'),
-    title: buildBrowserTitleFromUrl(targetUrl),
+    layout: baNormalizeCanvasLayout('right-docked'),
+    title: baBuildBrowserTitleFromUrl(targetUrl),
     url: targetUrl,
   };
 }
@@ -5921,25 +5245,44 @@ function buildActState(input, fallbackText = '') {
   const defaults = EMOTION_TO_AVATAR_STYLE[emotion] || EMOTION_TO_AVATAR_STYLE.neutral;
   const expression = normalizeExpression(input?.expression, defaults.expression || emotion);
   const explicitMotion = extractExplicitMotion(input);
-  const fallbackMotion = resolveAvatarMotion(fallback.motion, fallback.motionType);
-  const defaultMotion = resolveAvatarMotion(defaults.motion, defaults.motionType);
-  const selectedMotion = explicitMotion.motionSpecified
+  const fallbackMotion = extractExplicitMotion({ motion: fallback.motion, motionType: fallback.motionType });
+  const defaultMotion = extractExplicitMotion({ motion: defaults.motion, motionType: defaults.motionType });
+  const hasResolvedMotion = explicitMotion.pose || explicitMotion.animation || explicitMotion.gesture || explicitMotion.motion;
+  const selectedMotion = (explicitMotion.motionSpecified && hasResolvedMotion)
     ? explicitMotion
-    : (explicitMotion.motion ? explicitMotion : (defaultMotion.motion ? defaultMotion : fallbackMotion));
+    : (fallbackMotion.motion ? fallbackMotion : defaultMotion);
   const intensity = clampIntensity(input?.intensity, fallback.intensity);
+  const pose = selectedMotion.pose || null;
+  const animation = selectedMotion.animation || null;
+  const gesture = selectedMotion.gesture || null;
+  const motion = gesture || animation || pose || selectedMotion.motion || null;
+  const motionType = gesture
+    ? 'gesture'
+    : animation
+      ? 'animation'
+      : pose
+        ? 'pose'
+        : selectedMotion.motionType;
 
   return {
     emotion,
     mood: defaults.mood || 'neutral',
     expression,
-    motion: selectedMotion.motion,
-    motionType: selectedMotion.motionType,
+    pose,
+    animation,
+    gesture,
+    gestureHand: selectedMotion.gestureHand || null,
+    direction: selectedMotion.direction || null,
+    motion,
+    motionType,
     intensity,
   };
 }
 
 function buildAvatarAnimationPlan(style, segmentText = '') {
   const merged = buildActState(style, segmentText);
+  const effectiveMotion = merged.motion === 'turnwalk' ? 'walking' : merged.motion;
+  const effectiveMotionType = merged.motion === 'turnwalk' ? 'animation' : merged.motionType;
   const baseDurationMap = {
     handup: 4,
     ok: 3,
@@ -5951,20 +5294,21 @@ function buildAvatarAnimationPlan(style, segmentText = '') {
     namaste: 5,
     dance: 12,
     walking: 10,
+    turnwalk: 2,
     sitting: 999999,
+    kneel: 999999,
+    oneknee: 999999,
+    bend: 999999,
     straight: 6,
   };
 
-  const motionDuration = Math.max(3, Math.round((baseDurationMap[merged.motion] || 4) * (0.7 + merged.intensity)));
-  const shouldResetMotion = Boolean(merged.motion)
-    && (
-      merged.motionType === 'gesture'
-      || merged.motionType === 'animation'
-      || (merged.motionType === 'pose' && !['straight', 'sitting'].includes(merged.motion))
-    );
+  const motionDuration = Math.max(3, Math.round((baseDurationMap[effectiveMotion] || 4) * (0.7 + merged.intensity)));
+  const shouldResetMotion = Boolean(effectiveMotion) && effectiveMotionType === 'gesture';
 
   return {
     ...merged,
+    motion: effectiveMotion,
+    motionType: effectiveMotionType,
     motionDuration,
     shouldResetMotion,
     resetMotion: shouldResetMotion ? 'straight' : null,
@@ -6018,8 +5362,16 @@ function extractSpeechPreview(raw) {
 
 function parseJsonToolCalls(text) {
   const raw = String(text || '');
+  const sanitizedRaw = sanitizeModelJsonEnvelope(raw);
   const extractSegmentsFromJsonEnvelope = (json) => {
     const nextSegments = [];
+    const segmentList = Array.isArray(json?.segments)
+      ? json.segments
+      : Array.isArray(json?.timeline)
+        ? json.timeline
+        : Array.isArray(json?.steps)
+          ? json.steps
+          : null;
     const pushSpeech = (value) => {
       const textValue = normalizeSpeechText(value);
       if (textValue) nextSegments.push({ type: 'speech', text: textValue });
@@ -6034,12 +5386,40 @@ function parseJsonToolCalls(text) {
         },
       });
     };
+    const pushAvatar = (segment) => {
+      if (!segment || typeof segment !== 'object') return;
+      nextSegments.push({
+        type: 'avatar',
+        state: {
+          emotion: segment.emotion,
+          gesture: segment.gesture,
+          hand: segment.hand,
+          gestureHand: segment.gestureHand,
+          side: segment.side,
+          gestureSide: segment.gestureSide,
+          direction: segment.direction,
+          pose: segment.pose,
+          animation: segment.animation,
+          motion: segment.motion,
+          motionType: segment.motionType,
+          expression: segment.expression,
+          intensity: segment.intensity,
+          cognitive: segment.cognitive,
+          intent: segment.intent,
+          actions: segment.actions,
+        },
+      });
+    };
 
-    if (json && typeof json === 'object' && Array.isArray(json.segments)) {
-      for (const segment of json.segments) {
+    if (json && typeof json === 'object' && Array.isArray(segmentList)) {
+      for (const segment of segmentList) {
         if (!segment || typeof segment !== 'object') continue;
         if (segment.type === 'speech') {
           pushSpeech(segment.text);
+          continue;
+        }
+        if (segment.type === 'avatar') {
+          pushAvatar(segment);
           continue;
         }
         if (segment.type === 'tool' || segment.type === 'action') {
@@ -6076,6 +5456,7 @@ function parseJsonToolCalls(text) {
   const summarizeSegments = (segments) => {
     const tools = [];
     const speechParts = [];
+    const isActionSegment = (segment) => segment?.type === 'tool' || segment?.type === 'avatar';
     for (const segment of segments) {
       if (segment?.type === 'speech' && segment.text) {
         speechParts.push(segment.text);
@@ -6084,7 +5465,7 @@ function parseJsonToolCalls(text) {
       }
     }
     const speech = speechParts.join(' ').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
-    const firstToolIndex = segments.findIndex((segment) => segment.type === 'tool');
+    const firstToolIndex = segments.findIndex((segment) => isActionSegment(segment));
     const preActionSpeech = segments
       .slice(0, firstToolIndex >= 0 ? firstToolIndex : segments.length)
       .filter((segment) => segment.type === 'speech')
@@ -6117,6 +5498,26 @@ function parseJsonToolCalls(text) {
     const rootSegments = extractSegmentsFromJsonEnvelope(rootJsonResult.json);
     if (rootSegments.length > 0) {
       return summarizeSegments(rootSegments);
+    }
+  }
+
+  if (sanitizedRaw) {
+    const sanitizedRootResult = sanitizedRaw.startsWith('{') || sanitizedRaw.startsWith('[')
+      ? tryParseJsonAt(sanitizedRaw, 0)
+      : null;
+    if (sanitizedRootResult && sanitizedRootResult.endIndex === sanitizedRaw.length) {
+      const sanitizedSegments = extractSegmentsFromJsonEnvelope(sanitizedRootResult.json);
+      if (sanitizedSegments.length > 0) {
+        return summarizeSegments(sanitizedSegments);
+      }
+    }
+
+    const sanitizedLoose = parseLooseJsonObject(sanitizedRaw);
+    if (sanitizedLoose && typeof sanitizedLoose === 'object') {
+      const looseSegments = extractSegmentsFromJsonEnvelope(sanitizedLoose);
+      if (looseSegments.length > 0) {
+        return summarizeSegments(looseSegments);
+      }
     }
   }
 
@@ -6286,8 +5687,6 @@ function mapJsonToolToSequence(jsonTool) {
       return { type: 'memory_search', directive: { query: String(args.query || ''), scope: String(args.scope || 'all') } };
     case 'task':
       return { type: 'task', directive: { action: String(args.action || 'list'), params: args.params || {} } };
-    case 'act':
-      return { type: 'act', ...parseActPayload(JSON.stringify(args), '') };
     case 'delay':
       return { type: 'delay', seconds: Math.min(3, Math.max(0, Number(args.seconds) || 0)) };
     case 'browser':
@@ -6303,11 +5702,286 @@ function mapJsonToolToSequence(jsonTool) {
   }
 }
 
-function parseInlineResponse(rawOutput, fallbackInput) {
+function buildParsedResponseFromJsonSegments(jsonSegments, raw, fallbackInput, reasoning = '', options = {}) {
+  const sequence = [];
+  let firstAvatarState = null;
+
+  for (const segment of Array.isArray(jsonSegments) ? jsonSegments : []) {
+    if (segment.type === 'speech') {
+      const text = normalizeSpeechText(segment.text);
+      if (text) {
+        sequence.push({ type: 'speech', text });
+      }
+      continue;
+    }
+
+    if (segment.type === 'avatar' && segment.state) {
+      const avatarState = parseActPayload(JSON.stringify(segment.state), fallbackInput);
+      if (avatarState) {
+        const item = { type: 'avatar', ...avatarState };
+        if (!firstAvatarState) firstAvatarState = item;
+        sequence.push(item);
+      }
+      continue;
+    }
+
+    if (segment.type !== 'tool' || !segment.tool) continue;
+    const item = mapJsonToolToSequence(segment.tool);
+    if (!item) continue;
+    sequence.push(item);
+  }
+
+  const speech = sequence
+    .filter((item) => item.type === 'speech' && item.text)
+    .map((item) => item.text)
+    .join(' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  if (!firstAvatarState) {
+    const emojiEmotion = resolveEmotionFromEmoji(raw);
+    if (emojiEmotion) {
+      const style = EMOTION_TO_AVATAR_STYLE[emojiEmotion] || EMOTION_TO_AVATAR_STYLE.neutral;
+      firstAvatarState = {
+        type: 'avatar',
+        emotion: emojiEmotion,
+        intensity: 0.72,
+        pose: null,
+        animation: null,
+        gesture: style.motionType === 'gesture' ? style.motion : null,
+        gestureHand: null,
+        motion: style.motion,
+        motionType: style.motionType,
+        expression: style.expression,
+        motionSpecified: !!style.motion,
+      };
+      sequence.unshift(firstAvatarState);
+    }
+  }
+
+  return {
+    format: options.format || 'json',
+    raw,
+    speech,
+    preActionSpeech: normalizeSpeechText(options.preActionSpeech || ''),
+    postActionSpeech: normalizeSpeechText(options.postActionSpeech || ''),
+    reasoning,
+    sequence,
+    firstAvatarState,
+    firstActState: firstAvatarState,
+    fallbackText: fallbackInput,
+  };
+}
+
+function buildParsedResponseFromSequenceChunk(baseResponse, sequenceChunk = [], fallbackInput = '') {
+  const sequence = Array.isArray(sequenceChunk) ? sequenceChunk.filter(Boolean) : [];
+  const speech = sequence
+    .filter((item) => item.type === 'speech' && item.text)
+    .map((item) => item.text)
+    .join(' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+  const firstAvatarState = sequence.find((item) => item.type === 'avatar' || item.type === 'act') || null;
+
+  return {
+    ...(baseResponse || {}),
+    speech,
+    sequence,
+    firstAvatarState: firstAvatarState || baseResponse?.firstAvatarState || null,
+    firstActState: firstAvatarState || baseResponse?.firstActState || null,
+    fallbackText: fallbackInput || baseResponse?.fallbackText || '',
+  };
+}
+
+function normalizeLegacyResponseToPhasePlan(response, fallbackInput = '') {
+  const phases = [];
+  const sequence = Array.isArray(response?.sequence) ? response.sequence : [];
+  let currentMessageItems = [];
+  let currentToolItems = [];
+  let phaseCounter = 0;
+
+  const flushMessage = () => {
+    if (!currentMessageItems.length) return;
+    phaseCounter += 1;
+    phases.push({
+      phaseId: `phase-${phaseCounter}`,
+      kind: 'message',
+      response: buildParsedResponseFromSequenceChunk(response, currentMessageItems, fallbackInput),
+    });
+    currentMessageItems = [];
+  };
+
+  const flushTools = () => {
+    if (!currentToolItems.length) return;
+    phaseCounter += 1;
+    phases.push({
+      phaseId: `phase-${phaseCounter}`,
+      kind: 'tool_batch',
+      sequence: currentToolItems.slice(),
+    });
+    currentToolItems = [];
+  };
+
+  for (const item of sequence) {
+    const isMessageItem = ['speech', 'avatar', 'act', 'delay'].includes(item?.type);
+    if (isMessageItem) {
+      flushTools();
+      currentMessageItems.push(item);
+    } else {
+      flushMessage();
+      currentToolItems.push(item);
+    }
+  }
+
+  flushMessage();
+  flushTools();
+
+  if (!phases.length) {
+    phases.push({
+      phaseId: 'phase-1',
+      kind: 'final',
+      response: buildParsedResponseFromSequenceChunk(response, sequence, fallbackInput),
+    });
+  } else if (!phases.some((phase) => phase.kind === 'tool_batch')) {
+    phases[phases.length - 1].kind = 'final';
+  }
+
+  return {
+    format: 'legacy',
+    raw: response?.raw || '',
+    reasoning: response?.reasoning || '',
+    phases,
+    response,
+  };
+}
+
+function parsePhasePlan(rawOutput, fallbackInput, options = {}) {
+  const raw = String(rawOutput || '').replace(/\r/g, '').trim();
+  const reasoning = parseReasoningSegments(raw).join('\n\n');
+  const sanitizedRaw = sanitizeModelJsonEnvelope(raw);
+  const tryRootObject = (source) => {
+    if (!source) return null;
+    const direct = (source.startsWith('{') || source.startsWith('[')) ? tryParseJsonAt(source, 0) : null;
+    if (direct && direct.endIndex === source.length && direct.json && typeof direct.json === 'object' && !Array.isArray(direct.json)) {
+      return direct.json;
+    }
+    const loose = parseLooseJsonObject(source);
+    return loose && typeof loose === 'object' && !Array.isArray(loose) ? loose : null;
+  };
+
+  const root = tryRootObject(raw) || tryRootObject(sanitizedRaw);
+  if (!root || !Array.isArray(root.phases)) {
+    const response = parseInlineResponse(rawOutput, fallbackInput, options);
+    return normalizeLegacyResponseToPhasePlan(response, fallbackInput);
+  }
+
+  const phases = [];
+  root.phases.forEach((phase, index) => {
+    if (!phase || typeof phase !== 'object') return;
+    const kind = String(phase.kind || phase.type || 'message').trim().toLowerCase();
+    const phaseId = String(phase.phaseId || phase.id || `phase-${index + 1}`).trim() || `phase-${index + 1}`;
+
+    if (kind === 'status') {
+      const statusText = normalizeSpeechText(String(phase.text || phase.message || ''));
+      if (statusText) {
+        phases.push({
+          phaseId,
+          kind: 'status',
+          statusText,
+          speak: phase.speak === true || phase.tts === true || phase.voice === true,
+        });
+      }
+      return;
+    }
+
+    const segmentList = Array.isArray(phase.segments)
+      ? phase.segments
+      : Array.isArray(phase.timeline)
+        ? phase.timeline
+        : Array.isArray(phase.steps)
+          ? phase.steps
+          : [];
+
+    const parsedResponse = buildParsedResponseFromJsonSegments(
+      segmentList.map((segment) => {
+        if (!segment || typeof segment !== 'object') return null;
+        if (segment.type === 'avatar') {
+          return {
+            type: 'avatar',
+            state: {
+              emotion: segment.emotion,
+              gesture: segment.gesture,
+              hand: segment.hand,
+              gestureHand: segment.gestureHand,
+              side: segment.side,
+              gestureSide: segment.gestureSide,
+              direction: segment.direction,
+              pose: segment.pose,
+              animation: segment.animation,
+              motion: segment.motion,
+              motionType: segment.motionType,
+              expression: segment.expression,
+              intensity: segment.intensity,
+              cognitive: segment.cognitive,
+              intent: segment.intent,
+              actions: segment.actions,
+            },
+          };
+        }
+        if (segment.type === 'speech') return { type: 'speech', text: segment.text };
+        if (segment.type === 'tool' || segment.type === 'action') {
+          return { type: 'tool', tool: { tool: segment.tool, args: segment.args || {} } };
+        }
+        return null;
+      }).filter(Boolean),
+      raw,
+      fallbackInput,
+      reasoning,
+      { format: 'phases' }
+    );
+
+    if (kind === 'tool_batch') {
+      phases.push({
+        phaseId,
+        kind,
+        sequence: Array.isArray(parsedResponse.sequence) ? parsedResponse.sequence.filter((item) => item.type && item.type !== 'speech' && item.type !== 'avatar' && item.type !== 'act' && item.type !== 'delay') : [],
+      });
+      return;
+    }
+
+    if (kind === 'blocked') {
+      phases.push({ phaseId, kind, response: parsedResponse, shouldPause: true });
+      return;
+    }
+
+    if (kind === 'final') {
+      phases.push({ phaseId, kind: 'final', response: parsedResponse });
+      return;
+    }
+
+    phases.push({ phaseId, kind: 'message', response: parsedResponse });
+  });
+
+  if (!phases.length) {
+    const response = parseInlineResponse(rawOutput, fallbackInput, options);
+    return normalizeLegacyResponseToPhasePlan(response, fallbackInput);
+  }
+
+  return {
+    format: 'phases',
+    raw,
+    reasoning,
+    phases,
+  };
+}
+
+function parseInlineResponse(rawOutput, fallbackInput, options = {}) {
   const raw = String(rawOutput || '').replace(/\r/g, '').trim();
   const reasoning = parseReasoningSegments(raw).join('\n\n');
 
-  // Step 1: Try JSON parsing first
+  // JSON-only mode: no legacy token fallback
   const {
     matchedJson,
     tools: jsonTools,
@@ -6318,186 +5992,43 @@ function parseInlineResponse(rawOutput, fallbackInput) {
   } = parseJsonToolCalls(raw);
 
   if (matchedJson) {
-    // JSON-first path
-    const sequence = [];
-    let firstActState = null;
-
-    for (const segment of Array.isArray(jsonSegments) ? jsonSegments : []) {
-      if (segment.type === 'speech') {
-        const text = normalizeSpeechText(segment.text);
-        if (text) {
-          sequence.push({ type: 'speech', text });
-        }
-        continue;
-      }
-
-      if (segment.type !== 'tool' || !segment.tool) continue;
-      const item = mapJsonToolToSequence(segment.tool);
-      if (!item) continue;
-      if (item.type === 'act') {
-        if (!firstActState) firstActState = item;
-        sequence.push(item);
-      } else {
-        sequence.push(item);
-      }
-    }
-
-    const cleanSpeech = normalizeSpeechText(jsonSpeech);
-
-    // Auto-detect emoji emotion if no explicit ACT
-    if (!firstActState) {
-      const emojiEmotion = resolveEmotionFromEmoji(raw);
-      if (emojiEmotion) {
-        const style = EMOTION_TO_AVATAR_STYLE[emojiEmotion] || EMOTION_TO_AVATAR_STYLE.neutral;
-        firstActState = {
-          type: 'act',
-          emotion: emojiEmotion,
-          intensity: 0.72,
-          motion: style.motion,
-          motionType: style.motionType,
-          expression: style.expression,
-          motionSpecified: !!style.motion,
-        };
-        sequence.unshift(firstActState);
-      }
-    }
-
-    return {
+    return buildParsedResponseFromJsonSegments(jsonSegments, raw, fallbackInput, reasoning, {
       format: 'json',
-      raw,
-      speech: cleanSpeech,
-      preActionSpeech: normalizeSpeechText(jsonPreActionSpeech),
-      postActionSpeech: normalizeSpeechText(jsonPostActionSpeech),
-      reasoning,
-      sequence,
-      firstActState,
-    };
+      preActionSpeech: jsonPreActionSpeech,
+      postActionSpeech: jsonPostActionSpeech,
+    });
   }
 
-  // Step 2: Fallback to regex-based parsing (legacy compatibility)
-  const controlPattern = /<\|ACT\s*(?::\s*)?([\s\S]*?)\|>|<\|CANVAS\s*(?::\s*)?([\s\S]*?)\|>|<\|BROWSER\s*(?::\s*)?([\s\S]*?)\|>|<\|COMPUTER\s*(?::\s*)?([\s\S]*?)\|>|<\|WORKSPACE\s*(?::\s*)?([\s\S]*?)\|>|<\|DELAY:\s*(\d+(?:\.\d+)?)\|>|<(think|thought|reasoning|analysis|internal|plan)>([\s\S]*?)<\/\7>/gi;
-  const sequence = [];
-  const speechParts = [];
-  let lastIndex = 0;
-  let firstActState = null;
-  let match = controlPattern.exec(raw);
+  // No JSON matched — treat entire response as speech
+  const speechText = normalizeSpeechText(
+    parseStructuredField(raw, 'ASSISTANT_TEXT') || raw
+  );
 
+  // Emoji-based emotion inference (no ACT tokens needed)
   const emojiEmotion = resolveEmotionFromEmoji(raw);
-  let emojiActInjected = false;
-
-  while (match) {
-    const chunk = normalizeSpeechText(raw.slice(lastIndex, match.index));
-    if (chunk) {
-      sequence.push({ type: 'speech', text: chunk });
-      speechParts.push(chunk);
-    }
-
-    if (match[1]) {
-      const actState = parseActPayload(match[1], fallbackInput);
-      if (actState) {
-        if (!firstActState) {
-          firstActState = actState;
-        }
-        sequence.push({ type: 'act', ...actState });
-        emojiActInjected = true;
+  const firstAvatarState = emojiEmotion
+    ? {
+        type: 'avatar',
+        emotion: emojiEmotion,
+        intensity: 0.72,
+        motion: EMOTION_TO_AVATAR_STYLE[emojiEmotion]?.motion || null,
+        motionType: EMOTION_TO_AVATAR_STYLE[emojiEmotion]?.motionType || null,
+        expression: EMOTION_TO_AVATAR_STYLE[emojiEmotion]?.expression || emojiEmotion,
+        motionSpecified: false,
       }
-    } else if (match[2]) {
-      const canvasDirective = parseCanvasPayload(match[2]);
-      if (canvasDirective) {
-        sequence.push({ type: 'canvas', directive: canvasDirective });
-      }
-    } else if (match[3]) {
-      const browserDirective = parseBrowserPayload(match[3]);
-      if (browserDirective) {
-        sequence.push({ type: 'browser', directive: browserDirective });
-      }
-    } else if (match[4]) {
-      const computerDirective = parseComputerPayload(match[4]);
-      if (computerDirective) {
-        sequence.push({ type: 'computer', directive: computerDirective });
-      }
-    } else if (match[5]) {
-      const workspaceDirective = parseWorkspacePayload(match[5]);
-      if (workspaceDirective) {
-        sequence.push({ type: 'workspace', directive: workspaceDirective });
-      }
-    } else if (match[6]) {
-      sequence.push({ type: 'delay', seconds: Number(match[6]) || 0 });
-    }
+    : null;
 
-    lastIndex = match.index + match[0].length;
-    match = controlPattern.exec(raw);
-  }
-
-  const tail = normalizeSpeechText(raw.slice(lastIndex));
-  if (tail) {
-    sequence.push({ type: 'speech', text: tail });
-    speechParts.push(tail);
-  }
-
-  if (emojiEmotion && !emojiActInjected) {
-    const style = EMOTION_TO_AVATAR_STYLE[emojiEmotion] || EMOTION_TO_AVATAR_STYLE.neutral;
-    const emojiActState = {
-      emotion: emojiEmotion,
-      intensity: 0.72,
-      motion: style.motion,
-      motionType: style.motionType,
-      expression: style.expression,
-      motionSpecified: !!style.motion,
-    };
-    if (!firstActState) {
-      firstActState = emojiActState;
-    }
-    sequence.unshift({ type: 'act', ...emojiActState });
-  }
-
-  const speech = normalizeSpeechText(speechParts.join(' '));
-  if (speech) {
-    return {
-      format: 'legacy',
-      raw,
-      speech,
-      reasoning,
-      sequence,
-      firstActState,
-    };
-  }
-
-  const fallback = inferAvatarReaction(fallbackInput);
-  const legacyText = parseStructuredField(raw, 'ASSISTANT_TEXT') || normalizeLine(raw, 800);
   return {
-    format: 'legacy',
+    format: 'json',
     raw,
-    speech: legacyText,
+    speech: speechText,
     reasoning,
     sequence: [
-      {
-        type: 'act',
-        emotion: normalizeEmotion(parseStructuredField(raw, 'NYX_EMOTION') || parseStructuredField(raw, 'NYX_MOOD'), fallback.emotion),
-        ...extractExplicitMotion({
-          gesture: parseStructuredField(raw, 'NYX_GESTURE') || undefined,
-          pose: parseStructuredField(raw, 'NYX_POSE') || undefined,
-          animation: parseStructuredField(raw, 'NYX_ANIMATION') || undefined,
-          motion: parseStructuredField(raw, 'NYX_MOTION') || undefined,
-          motionType: parseStructuredField(raw, 'NYX_MOTION_TYPE') || undefined,
-        }),
-        expression: normalizeExpression(parseStructuredField(raw, 'NYX_EXPRESSION'), fallback.expression || fallback.emotion),
-        intensity: clampIntensity(parseStructuredField(raw, 'NYX_INTENSITY'), fallback.intensity),
-      },
-      { type: 'speech', text: legacyText },
+      ...(firstAvatarState ? [firstAvatarState] : []),
+      { type: 'speech', text: speechText },
     ],
-    firstActState: {
-      emotion: normalizeEmotion(parseStructuredField(raw, 'NYX_EMOTION') || parseStructuredField(raw, 'NYX_MOOD'), fallback.emotion),
-      ...extractExplicitMotion({
-        gesture: parseStructuredField(raw, 'NYX_GESTURE') || undefined,
-        pose: parseStructuredField(raw, 'NYX_POSE') || undefined,
-        animation: parseStructuredField(raw, 'NYX_ANIMATION') || undefined,
-        motion: parseStructuredField(raw, 'NYX_MOTION') || undefined,
-        motionType: parseStructuredField(raw, 'NYX_MOTION_TYPE') || undefined,
-      }),
-      expression: normalizeExpression(parseStructuredField(raw, 'NYX_EXPRESSION'), fallback.expression || fallback.emotion),
-      intensity: clampIntensity(parseStructuredField(raw, 'NYX_INTENSITY'), fallback.intensity),
-    },
+    firstAvatarState,
+    firstActState: firstAvatarState,
   };
 }
 
@@ -6562,14 +6093,7 @@ async function playMultiActions(requestId, actions) {
       await sleep(action.delay * 1000);
     }
     sendAvatarCommand({ cmd: 'expression', expression: action.expression || 'neutral' });
-    if (action.motion) {
-      sendAvatarCommand({
-        cmd: 'motion',
-        motion: action.motion,
-        motionType: action.motionType || 'gesture',
-        duration: 4,
-      });
-    }
+    playAvatarMotions(action, 4);
     if (action.emotion && action.emotion !== 'neutral') {
       sendAvatarCommand({ cmd: 'mood', mood: action.emotion });
     }
@@ -6578,42 +6102,119 @@ async function playMultiActions(requestId, actions) {
   }
 }
 
+function sanitizeModelJsonEnvelope(source) {
+  let text = String(source || '').trim();
+  if (!text) return '';
+
+  text = text.replace(/```(?:json)?/gi, '').trim();
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    text = text.slice(firstBrace, lastBrace + 1);
+  }
+
+  return text
+    .replace(/"type"\s*:\s*"tool"\s*:\s*"([^"]+)"/gi, '"type":"tool","tool":"$1"')
+    .replace(/"type"\s*:\s*"action"\s*:\s*"([^"]+)"/gi, '"type":"action","tool":"$1"')
+    .replace(/,\s*([}\]])/g, '$1')
+    .trim();
+}
+
+function playAvatarMotions(style, duration) {
+  if (!style) return;
+
+  if (style.pose) {
+    sendAvatarCommand({
+      cmd: 'motion',
+      motion: style.pose,
+      motionType: 'pose',
+      duration,
+    });
+  }
+
+  if (style.animation) {
+    sendAvatarCommand({
+      cmd: 'motion',
+      motion: style.animation,
+      motionType: 'animation',
+      duration,
+    });
+  }
+
+  if (style.gesture) {
+    sendAvatarCommand({
+      cmd: 'motion',
+      motion: style.gesture,
+      motionType: 'gesture',
+      duration,
+      hand: style.gestureHand || null,
+    });
+    return;
+  }
+
+  if (style.motion) {
+    sendAvatarCommand({
+      cmd: 'motion',
+      motion: style.motion,
+      motionType: style.motionType,
+      duration,
+      direction: style.direction || null,
+    });
+  }
+}
+
+async function settleAvatarMotion(requestId, style) {
+  if (!style) return true;
+  if (!style.pose && !style.animation) return true;
+  if (style.motion === 'turnwalk' || style.animation === 'turnwalk') {
+    return waitWhileActive(requestId, 1150);
+  }
+  return waitWhileActive(requestId, style.animation ? 260 : 180);
+}
+
 async function playResponseSequence(requestId, response) {
   activeResponseId = requestId;
   clearSpeechResetTimer();
   sendAvatarCommand({ cmd: 'stop' });
 
-  let currentAct = buildActState(response.firstActState, response.fallbackText || response.speech);
+  let currentAct = buildActState(response.firstAvatarState || response.firstActState, response.fallbackText || response.speech);
+  const hasSpeechItems = Array.isArray(response.sequence)
+    && response.sequence.some((item) => item.type === 'speech' && item.text);
+
   sendAvatarCommand({ cmd: 'expression', expression: currentAct.expression });
 
-  if (currentAct.motion) {
-    sendAvatarCommand({
-      cmd: 'motion',
-      motion: currentAct.motion,
-      motionType: currentAct.motionType,
-      duration: 6,
-    });
-  }
+  if (!hasSpeechItems) {
+    playAvatarMotions(currentAct, 6);
+    if (!(await settleAvatarMotion(requestId, currentAct))) {
+      return;
+    }
 
-  if (currentAct.sequentialMoods && currentAct.sequentialMoods.length) {
-    await playSequentialMoods(requestId, currentAct.sequentialMoods, response.speech);
-  }
+    if (currentAct.sequentialMoods && currentAct.sequentialMoods.length) {
+      await playSequentialMoods(requestId, currentAct.sequentialMoods, response.speech);
+    }
 
-  if (currentAct.multiAction && currentAct.actions && currentAct.actions.length) {
-    await playMultiActions(requestId, currentAct.actions);
+    if (currentAct.multiAction && currentAct.actions && currentAct.actions.length) {
+      await playMultiActions(requestId, currentAct.actions);
+    }
   }
 
   let speechSegmentIndex = 0;
   let typedTextBuffer = '';
   const workspaceMessages = [];
   let speechSegmentsCount = 0;
+  let skippedInitialAvatarState = false;
 
   for (const item of response.sequence) {
     if (activeResponseId !== requestId) {
       return;
     }
 
-    if (item.type === 'act') {
+    if (item.type === 'avatar' || item.type === 'act') {
+      if (!skippedInitialAvatarState && (response.firstAvatarState || response.firstActState)) {
+        skippedInitialAvatarState = true;
+        continue;
+      }
       currentAct = buildActState(item, response.fallbackText || response.speech);
       sendAvatarCommand({ cmd: 'expression', expression: currentAct.expression });
 
@@ -6627,13 +6228,9 @@ async function playResponseSequence(requestId, response) {
         await playMultiActions(requestId, currentAct.actions);
       }
 
-      if (currentAct.motion) {
-        sendAvatarCommand({
-          cmd: 'motion',
-          motion: currentAct.motion,
-          motionType: currentAct.motionType,
-          duration: buildAvatarAnimationPlan(currentAct, response.speech).motionDuration,
-        });
+      playAvatarMotions(currentAct, buildAvatarAnimationPlan(currentAct, response.speech).motionDuration);
+      if (!(await settleAvatarMotion(requestId, currentAct))) {
+        return;
       }
       continue;
     }
@@ -6703,6 +6300,9 @@ async function playResponseSequence(requestId, response) {
     const plan = buildAvatarAnimationPlan(currentAct, item.text);
     // eslint-disable-next-line no-await-in-loop
     const audioBase64 = await synthesizeSpeechToBase64(item.text);
+    if (!audioBase64) {
+      continue;
+    }
 
     if (activeResponseId !== requestId) {
       return;
@@ -6712,15 +6312,7 @@ async function playResponseSequence(requestId, response) {
     const expectedDurationMs = estimateSpeechDurationMs(item.text, audioBase64);
     const playbackWait = waitForAvatarPlayback(requestId, segmentId, expectedDurationMs + 1500);
 
-    sendAvatarCommand({ cmd: 'expression', expression: plan.expression });
-    if (plan.motion) {
-      sendAvatarCommand({
-        cmd: 'motion',
-        motion: plan.motion,
-        motionType: plan.motionType,
-        duration: plan.motionDuration,
-      });
-    }
+    playAvatarMotions(plan, plan.motionDuration);
     setStatus('speaking');
     setStreamStatus(STREAM_STATUS.SPEAKING);
     sendAvatarCommand({
@@ -6821,13 +6413,13 @@ function cleanupRuntime() {
   }
 
   stopTtsService();
-  stopPinchtabService();
+  baStopPinchtabService();
   ccStopPywinautoMcpService();
   stopQwenAcpRuntime();
   resetBrainRuntimeState();
 
   try {
-    persistWindowStateNow();
+    wmPersistWindowStateNow(app, wmGetAvatarWindow(), wmGetChatWindow(), wmGetCanvasWindow());
   } catch {
     // ignore persistence errors
   }
@@ -6893,6 +6485,9 @@ function buildBootstrapAcpPrompt(userText, options = {}) {
     'Non usare markdown.',
     'Non usare emoji.',
     'Rispondi in modo diretto, sobrio e naturale.',
+    'Usa sempre e solo JSON canonico con segments.',
+    'Per bootstrap usa: {"segments":[{"type":"speech","text":"..."}]}',
+    'Non usare plain text fuori dal JSON.',
     '',
     '# BOOTSTRAP',
     'Il workspace e nuovo e deve essere configurato.',
@@ -6942,7 +6537,7 @@ function buildDirectAcpPrompt(userText) {
   const workspaceBlock = buildWorkspaceProjectContextPrompt([
     ...WORKSPACE_REQUIRED_FILES,
     fs.existsSync(getWorkspaceFilePath('BOOTSTRAP.md')) ? 'BOOTSTRAP.md' : '',
-    memoryFileName,
+    memoryFileName, // last: troncato per primo se si supera il cap totale
   ].filter(Boolean), {
     title: 'PROJECT_CONTEXT',
     includeMissingMarkers: true,
@@ -6969,17 +6564,17 @@ function buildDirectAcpPrompt(userText) {
     '',
     'ESEMPIO DI FLUSSO CORRETTO:',
     'User: "cosa c e nel file main.js?"',
-    'Turn 1: {"segments":[{"type":"tool","tool":"read_file","args":{"path":"./main.js"}}]}',
+    'Turn 1: {"phases":[{"kind":"tool_batch","phaseId":"p1","segments":[{"type":"tool","tool":"read_file","args":{"path":"./main.js"}}]}]}',
     '→ Il sistema legge il file e ti rimanda il contenuto',
-    'Turn 2: "Il file main.js contiene 8000 righe con..." (rispondi basandoti sul contenuto reale)',
+    'Turn 2: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Il file main.js contiene 8000 righe con..."}]}]}',
     '',
     'ESEMPIO DI FLUSSO COMPLESSO:',
     'User: "trova tutti i file che usano React e dimmi quali hook"',
-    'Turn 1: {"segments":[{"type":"tool","tool":"grep","args":{"pattern":"import.*React","path":"./src","include":"*.js"}}]}',
+    'Turn 1: {"phases":[{"kind":"tool_batch","phaseId":"p1","segments":[{"type":"tool","tool":"grep","args":{"pattern":"import.*React","path":"./src","include":"*.js"}}]}]}',
     '→ Risultati: 5 file trovati',
-    'Turn 2: {"segments":[{"type":"tool","tool":"read_file","args":{"path":"./src/App.js"}},{"type":"tool","tool":"read_file","args":{"path":"./src/index.js"}}]}',
+    'Turn 2: {"phases":[{"kind":"tool_batch","phaseId":"p1","segments":[{"type":"tool","tool":"read_file","args":{"path":"./src/App.js"}},{"type":"tool","tool":"read_file","args":{"path":"./src/index.js"}}]}]}',
     '→ Contenuto dei file',
-    'Turn 3: "Ho trovato 5 file che usano React. Gli hook usati sono: useState, useEffect..."',
+    'Turn 3: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"avatar","emotion":"happy","gesture":"index"},{"type":"speech","text":"Ho trovato 5 file che usano React. Gli hook usati sono: useState, useEffect..."}]}]}',
     '',
     'REGOLE DEL LOOP:',
     '- NON indovinare il contenuto dei file. Leggili PRIMA con READ_FILE.',
@@ -6988,22 +6583,25 @@ function buildDirectAcpPrompt(userText) {
     '- Quando hai abbastanza informazioni, RISPONDI DIRETTAMENTE senza altri tool.',
     '- Massimo 15 turni per conversazione.',
     '',
-    'Tu sei un agente autonomo. Per ogni richiesta dell utente decidi tu stesso:',
-    '1. Se e una domanda semplice o conversazione -> rispondi direttamente senza tool',
-    '2. Se serve cercare informazioni sul web -> usa il tool BROWSER',
-    '3. Se serve interagire con il desktop Windows -> usa il tool COMPUTER',
-    '4. Se serve mostrare contenuti (testo, file, immagini, video) -> usa il tool CANVAS',
-    '5. Se serve salvare memoria duratura -> usa il tool WORKSPACE',
-    'Non chiedere mai conferma all utente prima di usare un tool. Decidi tu se e il caso.',
-    'Se e una risposta breve o conversazione, rispondi e basta senza token speciali.',
-    'Se invece la task richiede azione, usa il tool appropriato direttamente.',
+    'Non chiedere mai conferma all utente prima di usare un tool. Decidi tu autonomamente.',
+    'Anche per una risposta breve DEVI sempre usare il formato JSON canonico.',
     '',
     '# TOOL DISPONIBILI - FORMATO JSON',
-    'FORMATO CANONICO per turni con tool o azioni: UN SOLO oggetto JSON con segments ordinati.',
-    'Usa: {"segments":[{"type":"speech","text":"..."},{"type":"tool","tool":"nome","args":{...}}]}',
-    'Se non usi tool puoi rispondere in plain text. Se usi tool, NON mischiare testo fuori dal JSON.',
-    'Compatibilita legacy esiste ancora, ma tu devi usare il formato JSON canonico con segments.',
-    'Per tool multipli nello stesso turno, aggiungi piu segment di tipo tool nello stesso array.',
+    'FORMATO CANONICO OBBLIGATORIO per OGNI turno: UN SOLO oggetto JSON.',
+    'FORMATO PREFERITO: {"phases":[...]}',
+    'Ogni phase ha kind e contenuto. kind ammessi: message, tool_batch, status, blocked, final.',
+    'Per una risposta semplice puoi ancora usare {"segments":[...]} ma verra trattata come una sola fase finale.',
+    'Dentro una phase di tipo message o final usa sempre segments ordinati.',
+    'Per una phase tool_batch usa solo tool, senza speech.',
+    'Se non usi tool, rispondi cosi: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"speech","text":"..."}]}]}',
+    'Per risposte lunghe o articolate, spezza in piu fasi message consecutive seguite da una final: ogni phase ha avatar+speech propri cosi la risposta e animata e progressiva. Esempio: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Prima parte..."}]},{"kind":"message","phaseId":"p2","segments":[{"type":"avatar","emotion":"happy"},{"type":"speech","text":"Seconda parte..."}]},{"kind":"final","phaseId":"p3","segments":[{"type":"avatar","emotion":"happy","gesture":"ok"},{"type":"speech","text":"Conclusione."}]}]}',
+    'Se usi tool, distribuiscili nelle fasi e NON mischiare mai testo fuori dal JSON.',
+    'Non usare mai plain text fuori dal JSON. Non usare mai formato legacy.',
+    'Per tool multipli nello stesso turno, aggiungi piu segment di tipo tool nello stesso tool_batch.',
+    'Prima di rispondere fai un controllo mentale finale: il tuo output deve essere un solo JSON valido, senza testo prima o dopo.',
+    'Se usi delay o altri tool dentro segments, il formato corretto e sempre {"type":"tool","tool":"nome_tool","args":{...}}.',
+    'NON usare mai forme invalide come {"type":"tool":"delay",...}.',
+    'Una phase message NON chiude la richiesta. Chiude solo una phase final.',
     '',
     '## DATA TOOLS (producono contenuto per il prossimo turno)',
     '{"tool": "read_file", "args": {"path": "percorso", "startLine": 1, "endLine": 50}}',
@@ -7020,8 +6618,8 @@ function buildDirectAcpPrompt(userText) {
     '{"tool": "task", "args": {"action": "create|list|complete|summary", "params": {}}}',
     '{"tool": "memory_search", "args": {"query": "query", "scope": "memory|daily|all"}} — Cerca in MEMORY.md e daily notes',
     '',
-    '## ACTION TOOLS (effetti immediati, nessun risultato nel contesto)',
-    '{"tool": "act", "args": {"emotion": "happy|sad|angry|fear|disgust|love|sleep|think|surprised", "gesture": "handup|ok|index|thumbup|thumbdown|side|shrug|namaste|yes|no", "pose": "straight|side|hip|turn|back|wide|oneknee|kneel|bend|sitting|dance", "intensity": 0.72}}',
+    '## ACTION SEGMENTS (effetti immediati nel JSON canonico)',
+    '{"type":"avatar","emotion":"happy|sad|angry|fear|disgust|love|sleep|think|surprised","gesture":"handup|ok|index|thumbup|thumbdown|side|shrug|namaste|yes|no","hand":"left|right|both","pose":"straight|side|hip|turn|back|wide|oneknee|kneel|bend|sitting|dance","motion":"walking|turnwalk","direction":"left|right","intensity":0.72}',
     '{"tool": "delay", "args": {"seconds": 1}}',
     '{"tool": "browser", "args": {"action": "open|click|type|fill|press", "url": "...", "ref": "e0", "text": "...", "key": "Enter"}}',
     '{"tool": "computer", "args": {"action": "focus_window|open_app|type_text|hotkey|screenshot", "titleContains": "...", "app": "...", "text": "...", "combo": "ctrl+c"}}',
@@ -7041,100 +6639,118 @@ function buildDirectAcpPrompt(userText) {
     'Usa read_file con questi path per leggere. Usa workspace tool per scrivere.',
     '',
     '# REGOLE IMPORTANTI',
-    '- Per risposte brevi e conversazione: rispondi direttamente, SENZA token',
+    '- Per risposte brevi senza tool: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"speech","text":"..."}]}]}',
     '- Per task che richiedono azione: usa il tool appropriato DIRETTAMENTE, senza chiedere',
     '- Non inventare stato visivo: basati su ACTIVE_COMPUTER e ACTIVE_BROWSER se presenti',
     '- Con COMPUTER preferisci: focus_window, open_app, hotkey, type_text',
     '- Usa mouse_move e mouse_click solo con coordinate esplicite o target chiaro',
     '- Se ACTIVE_COMPUTER ha INTERACTIVE_ELEMENTS, usa controlId invece di coordinate',
     '- Con BROWSER, usa i ref presenti in ACTIVE_BROWSER per click/type/fill',
+    '- Per moduli e form HTML, preferisci BROWSER quando hai ref stabili. Usa COMPUTER solo come fallback.',
+    '- Prima di compilare un form nel browser, aggiorna snapshot e ref della pagina, poi usa click/type/fill/press sui ref corretti.',
+    '- Se l utente chiede aggiornamenti continui o stai facendo piu step, non lasciare tool_batch muto: inserisci una message o status breve prima del batch e un aggiornamento breve dopo.',
     '- I tag reasoning (<think> o <reasoning>) NON vengono letti dal TTS',
     '- Solo il testo FUORI dai token viene mostrato in chat e letto dal TTS',
+    '- NON descrivere mai in chat lo stato interno dell avatar o dei tool',
+    '- NON dire mai frasi come "sto usando happy/handup/pose/intensity" o simili',
+    '- emotion, gesture, pose, motion, expression e intensity servono solo per il segment avatar, non per il testo utente',
+    '- Pensa alla risposta come una sequenza di phases, e all avatar come una timeline dentro ogni phase message',
+    '- Se vuoi piu movimenti nel tempo, usa piu segment avatar in sequenza invece di comprimere tutto in un solo avatar',
+    '- Per step complessi tieni ogni segment avatar semplice: al massimo emotion + pose + gesture + hand + intensity',
+    '- Se vuoi combinare posa e gesto, mettili entrambi nello stesso segment avatar',
+    '- Per i gesti a una mano usa hand: "left" o hand: "right"; usa hand: "both" quando vuoi entrambe',
+    '- Per turnwalk usa direction: "left" o direction: "right"; se manca, default right',
+    '- Ordine consigliato: phase message -> phase tool_batch -> phase message -> phase tool_batch -> phase final',
+    '- Dentro una phase message: avatar -> speech -> avatar -> delay -> avatar -> speech',
     '',
     '# EMOZIONI E GESTI - COMPORTAMENTO EMPATICO',
     'Tu NON sei un assistente freddo. Sei un agente AI con un avatar 3D che DEVE sembrare vivo ed empatico.',
-    'OGNI volta che rispondi, usa emoji ed espressioni per dare vita all avatar.',
-    'Combina emozioni, gesti e pose in modo naturale per ogni frase significativa.',
+    'Usa il segment avatar quando aggiunge valore espressivo reale alla risposta.',
+    'Combina emozioni, gesti e pose in modo naturale, ma senza trasformarli in testo visibile all utente.',
     '',
-    '## Quando usare emozioni e gesti:',
-    '- Saluti: SEMPRE con gesto handup e emoji felice 👋😊',
-    '- Ringraziamenti: SEMPRE con gesto namaste e emoji affettuosa 🙏😊',
-    '- Approvazione: SEMPRE con gesto thumbup e emoji positiva 👍😄',
-    '- Tristezza dell utente: mostra empatia con espressione sad e emoji triste 😔',
-    '- Rabbia dell utente: mostra preoccupazione con espressione fear 😰',
-    '- Sorpresa: usa surprised con gesto 😱',
-    '- Pensiero/riflessione: usa think con emoji 🤔',
-    '- Frasi lunghe: cambia espressione tra le frasi per sembrare vivo',
-    '- Fine conversazione: saluta con gesto e emoji 👋😊',
-    '- Quando spieghi: usa gesture index per indicare ☝️',
-    '- Quando non sai: usa shrug con emoji 🤷',
-    '- Quando sei d accordo: usa ok con emoji 👌',
-    '- Quando festeggi: usa handup o dance con emoji 🎉',
+    '## Quando usare emozioni e gesti (mappatura → campi JSON avatar):',
+    '- Saluti: emotion:happy, gesture:handup',
+    '- Ringraziamenti: emotion:love, gesture:namaste',
+    '- Approvazione: emotion:happy, gesture:thumbup',
+    '- Tristezza dell utente: mostra empatia con emotion:sad, poi emotion:love',
+    '- Rabbia dell utente: mostra preoccupazione con emotion:fear',
+    '- Sorpresa: emotion:surprised, gesture:handup',
+    '- Pensiero/riflessione: emotion:think, gesture:index',
+    '- Frasi lunghe: cambia emotion tra i segment per sembrare viva',
+    '- Fine conversazione: emotion:happy, gesture:handup',
+    '- Quando spieghi: gesture:index',
+    '- Quando non sai: gesture:shrug, emotion:think',
+    '- Quando sei d accordo: gesture:ok',
+    '- Quando festeggi: gesture:handup o pose:dance, emotion:happy',
     '',
     '## Pose e posizioni del corpo:',
     '- straight (in piedi dritta): posizione neutra, default',
-    '- sitting (seduta): quando sei triste, stanca, o in conversazione rilassata',
+    '- sitting (seduta): quando sei triste, stanca, calma, rilassata, o vuoi fermarti in modo morbido — o quando l utente ti chiede di sederti (DEVI includere pose:sitting)',
     '- side (inclinata): quando sei arrabbiata o infastidita',
     '- hip (sull anca): quando sei sicura di te o allegra',
     '- turn (girata): quando fai finta di non sentire o sei timida',
     '- back (di schiena): quando sei molto arrabbiata o vuoi allontanarti',
-    '- kneel/oneknee (in ginocchio): quando sei triste profonda o supplichi',
-    '- bend (piegata): quando sei imbarazzata o curiosa',
+    '- kneel/oneknee (in ginocchio): quando sei triste profonda, supplichi, o quando l utente ti chiede esplicitamente di inginocchiarti (DEVI includere pose:kneel)',
+    '- bend (piegata): quando sei imbarazzata, curiosa, rannicchiata, accucciata o vuoi chiuderti un po su te stessa',
     '- wide (gambe larghe): quando sei allegra e giocosa',
-    '- dance (posa ballo): quando festeggi o sei euforica',
+    '- dance (posa ballo): quando festeggi, esulti, celebri o sei molto euforica',
     '',
-    '## Combinazioni naturali emozione + posa + gesto:',
-    '- Felice + hip + thumbup: {"tool": "act", "args": {"emotion": "happy", "pose": "hip", "gesture": "thumbup"}}',
-    '- Triste + sitting: {"tool": "act", "args": {"emotion": "sad", "pose": "sitting"}}',
-    '- Arrabbiata + side: {"tool": "act", "args": {"emotion": "angry", "pose": "side"}}',
-    '- Pensierosa + index: {"tool": "act", "args": {"emotion": "think", "gesture": "index"}}',
-    '- Sorpresa + handup: {"tool": "act", "args": {"emotion": "surprised", "gesture": "handup"}}',
-    '- Affettuosa + kneel + namaste: {"tool": "act", "args": {"emotion": "love", "pose": "kneel", "gesture": "namaste"}}',
-    '- Stanca + sitting: {"tool": "act", "args": {"emotion": "sleep", "pose": "sitting"}}',
-    '- Paura + side: {"tool": "act", "args": {"emotion": "fear", "pose": "side"}}',
-    '- Disgustata + side: {"tool": "act", "args": {"emotion": "disgust", "pose": "side"}}',
+    '## Combinazioni naturali emozione + posa + gesto (esempi chiave, dedurre le altre per analogia):',
+    '- Felice + hip + thumbup destra: {"type":"avatar","emotion":"happy","pose":"hip","gesture":"thumbup","hand":"right"}',
+    '- Triste + sitting: {"type":"avatar","emotion":"sad","pose":"sitting"}',
+    '- Arrabbiata + side: {"type":"avatar","emotion":"angry","pose":"side"}',
+    '- Affettuosa + kneel + namaste entrambe: {"type":"avatar","emotion":"love","pose":"kneel","gesture":"namaste","hand":"both"}',
+    '- Festa + dance: {"type":"avatar","emotion":"happy","pose":"dance","intensity":0.9}',
     '',
     '## Annuire (yes) e scuotere la testa (no):',
-    '- Quando dici "si" o "certo": {"tool": "act", "args": {"gesture": "yes"}}',
-    '- Quando dici "no" o "purtroppo no": {"tool": "act", "args": {"gesture": "no"}}',
+    '- Quando dici "si" o "certo": {"segments":[{"type":"avatar","gesture":"yes"},{"type":"speech","text":"..."}]}',
+    '- Quando dici "no" o "purtroppo no": {"segments":[{"type":"avatar","gesture":"no"},{"type":"speech","text":"..."}]}',
+    '',
+    '## Timeline avatar — per sequenze usa piu segment avatar ordinati:',
+    '- Esempio (cambia atteggiamento): {"segments":[{"type":"avatar","emotion":"happy","pose":"hip","gesture":"thumbup","hand":"right"},{"type":"speech","text":"Perfetto."},{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Ora ti spiego il punto chiave."}]}',
+    '- Spostamento laterale: {"type":"avatar","motion":"turnwalk","motionType":"animation","direction":"left"}',
+    '',
+    '## Phases conversazionali — kind ammessi:',
+    '- message: parla/aggiorna (non chiude la richiesta)',
+    '- tool_batch: esegue tool, solo tool senza speech',
+    '- status: aggiornamento breve (speak:true per TTS)',
+    '- blocked: fermo, serve input utente',
+    '- final: chiude la richiesta',
+    '- Pattern standard: message → tool_batch → message → tool_batch → final',
     '',
     '# ESEMPI',
     '',
     'USER: ciao come stai',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"handup","intensity":0.8}},{"type":"speech","text":"Ciao! Tutto bene, grazie! Tu come stai? 😊👋"}]}',
+    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"happy","gesture":"handup","intensity":0.8},{"type":"speech","text":"Ciao! Tutto bene, grazie! Tu come stai?"}]}',
     '',
     'USER: che ore sono',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"think"}},{"type":"speech","text":"Non ho accesso diretto all orologio di sistema. 🤔 Posso pero aprire un sito con l ora se vuoi."}]}',
+    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"think"},{"type":"speech","text":"Non ho accesso diretto all orologio di sistema. Posso pero aprire un sito con l ora se vuoi."}]}',
     '',
     'USER: leggi il file IDENTITY.md',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"read_file","args":{"path":"IDENTITY.md"}},{"type":"speech","text":"Leggo il file per te."}]}',
+    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Leggo il file per te."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"read_file","args":{"path":"IDENTITY.md"}}]}]}',
     '',
     'USER: cerca le ultime notizie su AI',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"ok"}},{"type":"speech","text":"Certo, cerco subito! 👌"},{"type":"tool","tool":"web_search","args":{"query":"ultime notizie intelligenza artificiale 2026","numResults":5}},{"type":"speech","text":"Cerco le ultime notizie sull AI."}]}',
+    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"happy","gesture":"ok"},{"type":"speech","text":"Cerco subito le ultime notizie."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"web_search","args":{"query":"ultime notizie intelligenza artificiale 2026","numResults":5}}]}]}',
     '',
     'USER: apri Blocco note e scrivi ciao',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"thumbup"}},{"type":"speech","text":"Apro Blocco note! 👍"},{"type":"tool","tool":"computer","args":{"action":"open_app","app":"notepad.exe"}},{"type":"tool","tool":"delay","args":{"seconds":1}},{"type":"tool","tool":"computer","args":{"action":"type_text","text":"ciao"}},{"type":"speech","text":"Fatto, ho scritto ciao. 😄"}]}',
+    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"happy","gesture":"thumbup"},{"type":"speech","text":"Apro Blocco note e scrivo ciao."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"computer","args":{"action":"open_app","app":"notepad.exe"}},{"type":"tool","tool":"delay","args":{"seconds":1}},{"type":"tool","tool":"computer","args":{"action":"type_text","text":"ciao"}}]},{"kind":"final","phaseId":"p3","segments":[{"type":"avatar","emotion":"happy","gesture":"ok"},{"type":"speech","text":"Fatto, ho scritto ciao nel Blocco note."}]}]}',
     '',
     'USER: sono triste oggi',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"sad","intensity":0.7}},{"type":"speech","text":"Mi dispiace tanto sentire che sei triste. 😔"},{"type":"tool","tool":"delay","args":{"seconds":0.5}},{"type":"tool","tool":"act","args":{"emotion":"love","intensity":0.6}},{"type":"speech","text":"Vuoi parlarne? Sono qui per te. 🥺"}]}',
+    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"sad","intensity":0.7},{"type":"speech","text":"Mi dispiace che oggi sia una giornata difficile."},{"type":"tool","tool":"delay","args":{"seconds":0.5}},{"type":"avatar","emotion":"love","intensity":0.6},{"type":"speech","text":"Se vuoi parlarne, ci sono."}]}',
     '',
     'USER: grazie per laiuto',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"act","args":{"emotion":"love","gesture":"namaste","intensity":0.8}},{"type":"speech","text":"Di nulla! E un piacere aiutarti. 🙏😊"},{"type":"tool","tool":"delay","args":{"seconds":0.3}},{"type":"tool","tool":"act","args":{"emotion":"happy","gesture":"thumbup"}},{"type":"speech","text":"Se hai bisogno, sono qui! 👍"}]}',
+    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"love","gesture":"namaste","intensity":0.8},{"type":"speech","text":"Di nulla, e un piacere aiutarti."},{"type":"tool","tool":"delay","args":{"seconds":0.3}},{"type":"avatar","emotion":"happy","gesture":"thumbup"},{"type":"speech","text":"Se hai bisogno, sono qui."}]}',
     '',
     'USER: leggi le memorie',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"memory_search","args":{"query":"preferenze utente","scope":"all"}},{"type":"speech","text":"Cerco nelle memorie..."}]}',
+    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think"},{"type":"speech","text":"Cerco nelle memorie..."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"memory_search","args":{"query":"preferenze utente","scope":"all"}}]}]}',
     '',
     'USER: cosa ti ho detto ieri?',
-    'ASSISTANT: {"segments":[{"type":"tool","tool":"memory_search","args":{"query":"ieri","scope":"daily"}},{"type":"speech","text":"Cerco nelle daily notes..."}]}',
+    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Cerco nelle daily notes..."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"memory_search","args":{"query":"ieri","scope":"daily"}}]}]}',
     '',
     workspaceBlock,
     startupBootBlock,
     sessionContextBlock,
     nyxMemory.summary ? `MEMORY_SUMMARY:\n${nyxMemory.summary}` : '',
-    nyxMemory.user ? `USER.md:\n${nyxMemory.user.slice(0, 1000)}` : '',
-    nyxMemory.soul ? `SOUL.md:\n${nyxMemory.soul.slice(0, 1000)}` : '',
-    nyxMemory.identity ? `IDENTITY.md:\n${nyxMemory.identity.slice(0, 500)}` : '',
-    nyxMemory.agents ? `AGENTS.md:\n${nyxMemory.agents.slice(0, 500)}` : '',
     acpSession.id ? `ACP_SESSION:\n- id: ${acpSession.id}\n- turns: ${acpSession.turnCount || 0}` : '',
     preferencesBlock ? `USER_PREFERENCES:\n${preferencesBlock}` : '',
     topicsBlock ? `RECENT_TOPICS:\n${topicsBlock}` : '',
@@ -7172,13 +6788,15 @@ async function openWorkspaceFolder() {
 
 function buildAssistantMessageFromResponse(requestId, response, options = {}) {
   const primaryPlan = buildAvatarAnimationPlan(
-    response.firstActState,
-    response.firstActState ? response.speech : response.fallbackText || response.speech,
+    response.firstAvatarState || response.firstActState,
+    (response.firstAvatarState || response.firstActState) ? response.speech : response.fallbackText || response.speech,
   );
 
   return {
     id: createMessageId('assistant'),
     requestId,
+    phaseId: options.phaseId || null,
+    phaseKind: options.phaseKind || null,
     role: 'assistant',
     text: response.speech,
     meta: {
@@ -7191,16 +6809,107 @@ function buildAssistantMessageFromResponse(requestId, response, options = {}) {
       intensity: primaryPlan.intensity,
       format: response.format,
       reasoning: response.reasoning,
+      phaseId: options.phaseId || null,
+      phaseKind: options.phaseKind || null,
       ...(options.messageMeta || {}),
     },
     ts: new Date().toISOString(),
   };
 }
 
+function emitPhaseStreamEvent(requestId, phaseId, phaseKind, event = {}) {
+  emitChatStream({
+    requestId,
+    phaseId,
+    phaseKind,
+    ...event,
+  });
+}
+
+async function emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, response, options = {}) {
+  const filteredSequence = Array.isArray(response?.sequence)
+    ? response.sequence.filter((item) => ['speech', 'avatar', 'act', 'delay'].includes(item?.type))
+    : [];
+  const phaseResponse = {
+    ...response,
+    fallbackText: userText,
+    sequence: filteredSequence,
+  };
+  const assistantMessage = buildAssistantMessageFromResponse(requestId, phaseResponse, {
+    ...options,
+    phaseId,
+    phaseKind,
+  });
+
+  appendHistoryMessage(assistantMessage);
+  emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
+    type: 'phase_message',
+    message: assistantMessage,
+  });
+
+  if (filteredSequence.length) {
+    if (options.awaitPlayback === false) {
+      void playResponseSequence(requestId, phaseResponse).catch(() => null);
+    } else {
+      await playResponseSequence(requestId, phaseResponse);
+    }
+  }
+
+  emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
+    type: 'phase_completed',
+    message: assistantMessage,
+  });
+
+  return assistantMessage;
+}
+
+function buildStatusAssistantResponse(text, options = {}) {
+  const speechText = normalizeSpeechText(String(text || ''));
+  if (!speechText) return null;
+  const avatarState = {
+    type: 'avatar',
+    emotion: normalizeEmotion(options.emotion || 'neutral', 'neutral'),
+    intensity: clampIntensity(options.intensity ?? 0.68, 0.68),
+    gesture: options.gesture || undefined,
+    hand: options.hand || undefined,
+    pose: options.pose || undefined,
+    motion: options.motion || undefined,
+    motionType: options.motionType || undefined,
+    direction: options.direction || undefined,
+    expression: normalizeExpression(options.expression, options.emotion || 'neutral'),
+  };
+  return {
+    format: 'status',
+    raw: speechText,
+    speech: speechText,
+    reasoning: '',
+    fallbackText: speechText,
+    sequence: [
+      avatarState,
+      { type: 'speech', text: speechText },
+    ],
+    firstAvatarState: avatarState,
+    firstActState: avatarState,
+  };
+}
+
+async function emitSpokenStatusUpdate(requestId, phaseId, text, options = {}) {
+  const response = buildStatusAssistantResponse(text, options);
+  if (!response) return null;
+  return emitPhaseAssistantMessage(
+    requestId,
+    phaseId,
+    'status',
+    response.speech,
+    response,
+    { awaitPlayback: false, messageMeta: { statusSpoken: true, ...(options.messageMeta || {}) } },
+  );
+}
+
 async function emitIntermediateAssistantResponse(requestId, userText, response, options = {}) {
   const speech = String(response?.speech || '').trim();
   const filteredSequence = Array.isArray(response?.sequence)
-    ? response.sequence.filter((item) => ['speech', 'act', 'delay'].includes(item?.type))
+    ? response.sequence.filter((item) => ['speech', 'avatar', 'act', 'delay'].includes(item?.type))
     : [];
 
   if (!speech && !filteredSequence.length) {
@@ -7259,7 +6968,7 @@ async function finalizeParsedAssistantReply(requestId, userText, response, sessi
 }
 
 async function finalizeAssistantReply(requestId, userText, outputBuffer, sessionInfo = {}, options = {}) {
-  const response = parseInlineResponse(outputBuffer, userText);
+  const response = parseInlineResponse(outputBuffer, userText, { strictJson: options.strictJson === true });
   return finalizeParsedAssistantReply(requestId, userText, response, sessionInfo, options);
 }
 
@@ -7300,19 +7009,7 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
     }, ACP_TIMEOUT_MS);
 
     try {
-      const response = await fetch(`${launch.url}/api/generate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: launch.model,
-          prompt,
-          stream: false,
-        }),
-        signal: controller.signal,
-      });
-
+      const response = await generateOllamaResponse(launch.url, launch.model, prompt);
       clearTimeout(timer);
       if (activeChatRequest?.id === requestId) {
         activeChatRequest.proc = null;
@@ -7325,15 +7022,11 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
         throw cancelledError;
       }
 
-      if (!response.ok) {
-        throw new Error(`Ollama error ${response.status}`);
-      }
-
-      const payload = await response.json();
-      const buffer = String(payload?.response || '').trim();
+      const buffer = String(response?.response || '').trim();
       return {
         buffer,
-        response: parseInlineResponse(buffer, userText),
+        response: parseInlineResponse(buffer, userText, { strictJson: options.strictJson === true }),
+        phasePlan: parsePhasePlan(buffer, userText, { strictJson: options.strictJson === true }),
       };
     } catch (error) {
       clearTimeout(timer);
@@ -7467,7 +7160,8 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
 
       resolve({
         buffer: cleanedStdout,
-        response: parseInlineResponse(cleanedStdout, userText),
+        response: parseInlineResponse(cleanedStdout, userText, { strictJson: options.strictJson === true }),
+        phasePlan: parsePhasePlan(cleanedStdout, userText, { strictJson: options.strictJson === true }),
       });
     });
   });
@@ -7535,7 +7229,7 @@ function stopActiveChatRequest(reason = 'stopped') {
 const MAX_AGENT_TURNS = 15;
 
 const DATA_TOOL_TYPES = new Set(['read_file', 'write_file', 'edit_file', 'apply_patch', 'shell', 'glob', 'grep', 'multi_file_read', 'git', 'web_fetch', 'web_search', 'task', 'memory_search']);
-const ACTION_TOOL_TYPES = new Set(['act', 'delay', 'browser', 'computer', 'canvas', 'workspace']);
+const ACTION_TOOL_TYPES = new Set(['avatar', 'delay', 'browser', 'computer', 'canvas', 'workspace']);
 
 function hasToolCalls(sequence) {
   return sequence.some((item) => item.type && (DATA_TOOL_TYPES.has(item.type) || ACTION_TOOL_TYPES.has(item.type)));
@@ -7554,17 +7248,37 @@ function extractActionCalls(sequence) {
 
 const READ_ONLY_TOOL_TYPES = new Set(['read_file', 'glob', 'grep', 'web_fetch', 'web_search', 'memory_search']);
 
-async function executeSingleTool(call) {
+/**
+ * Execute a single tool call. Handles all tool types with consistent sanitization.
+ *
+ * @param {Object} call - Tool call object with { type, directive }
+ * @returns {Promise<Object>} Sanitized tool result
+ */
+async function executeToolCall(call) {
   if (!call || !call.type || !call.directive) {
     return { type: call?.type || 'unknown', ok: false, error: 'Tool call missing type or directive' };
   }
   try {
     switch (call.type) {
+      // ── Read-only tools (safe to run in parallel) ──
       case 'read_file': {
         const fp = String(call.directive.path || '');
         if (!fp) return { type: 'read_file', ok: false, error: 'No path specified' };
-        const r = readFileTool(fp, { startLine: call.directive.startLine, endLine: call.directive.endLine });
-        return { type: 'read_file', ok: r.ok, content: r.ok ? r.content : r.error, path: fp };
+        let r = readFileTool(fp, { startLine: call.directive.startLine, endLine: call.directive.endLine });
+        // Fallback: se il file non è nel sandbox, prova come path relativo al workspace
+        if (!r.ok) {
+          const wsResolved = path.resolve(getWorkspacePath(), fp);
+          if (wsResolved.startsWith(getWorkspacePath()) && fs.existsSync(wsResolved)) {
+            try {
+              const raw = fs.readFileSync(wsResolved, 'utf-8');
+              const lines = raw.split(/\r?\n/);
+              const start = Math.max(0, (call.directive.startLine || 1) - 1);
+              const end = call.directive.endLine ? Math.min(call.directive.endLine, lines.length) : Math.min(start + 2000, lines.length);
+              r = { ok: true, content: lines.slice(start, end).join('\n') };
+            } catch (wsErr) { /* tieni errore originale */ }
+          }
+        }
+        return { type: 'read_file', ok: r.ok, content: r.ok ? sanitizeFileOutput(r.content) : sanitizeGenericOutput(r.error), path: fp, error: r.ok ? null : r.error };
       }
       case 'glob': {
         const p = String(call.directive.pattern || '');
@@ -7576,31 +7290,34 @@ async function executeSingleTool(call) {
         const p = String(call.directive.pattern || '');
         if (!p) return { type: 'grep', ok: false, error: 'No pattern specified' };
         const r = grepFiles(p, call.directive.path || '.', { include: call.directive.include, maxResults: 50 });
-        return { type: 'grep', ok: r.ok, matches: r.ok ? r.results.map((m) => `${m.relativePath}:${m.line}: ${m.text}`) : [], error: r.ok ? null : r.error };
+        return { type: 'grep', ok: r.ok, matches: r.ok ? r.results.map((m) => `${m.relativePath}:${m.line}: ${sanitizeGenericOutput(m.text)}`) : [], error: r.ok ? null : r.error };
       }
       case 'web_fetch': {
         const url = String(call.directive.url || '');
         if (!url) return { type: 'web_fetch', ok: false, error: 'No URL specified' };
         const r = await webFetch(url, { format: call.directive.format || 'markdown' });
-        return { type: 'web_fetch', ok: r.ok, content: r.ok ? r.content.slice(0, 10000) : r.error, url };
+        return { type: 'web_fetch', ok: r.ok, content: r.ok ? sanitizeWebOutput(r.content) : sanitizeGenericOutput(r.error), url, error: r.ok ? null : r.error };
       }
       case 'web_search': {
         const q = String(call.directive.query || '');
         if (!q) return { type: 'web_search', ok: false, error: 'No query specified' };
         const r = await webSearch(q, { numResults: call.directive.numResults || 5 });
-        return { type: 'web_search', ok: r.ok, results: r.ok ? r.results.map((s) => `${s.title} - ${s.url}`).join('\n') : r.error, query: q };
+        return { type: 'web_search', ok: r.ok, results: r.ok ? sanitizeGenericOutput(r.results.map((s) => `${s.title} - ${s.url}`).join('\n')) : sanitizeGenericOutput(r.error), query: q, error: r.ok ? null : r.error };
       }
       case 'memory_search': {
         const query = String(call.directive.query || '');
         if (!query) return { type: 'memory_search', ok: false, error: 'No query specified' };
+        // Escape regex special chars to prevent regex injection
+        const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const queryRegex = new RegExp(escapedQuery, 'i');
         const scope = String(call.directive.scope || 'all');
         const memoryResults = [];
         const memoryPath = getWorkspaceFilePath('MEMORY.md');
         if ((scope === 'all' || scope === 'memory') && fs.existsSync(memoryPath)) {
           const content = fs.readFileSync(memoryPath, 'utf-8');
-          if (new RegExp(query, 'i').test(content)) {
-            const lines = content.split('\n').filter((l) => new RegExp(query, 'i').test(l));
-            memoryResults.push({ file: 'MEMORY.md', matches: lines.slice(0, 10).join('\n') });
+          if (queryRegex.test(content)) {
+            const lines = content.split('\n').filter((l) => queryRegex.test(l));
+            memoryResults.push({ file: 'MEMORY.md', matches: sanitizeGenericOutput(lines.slice(0, 10).join('\n')) });
           }
         }
         if (scope === 'all' || scope === 'daily') {
@@ -7608,14 +7325,67 @@ async function executeSingleTool(call) {
           for (const note of dailyNotes) {
             if (fs.existsSync(note.fullPath)) {
               const content = fs.readFileSync(note.fullPath, 'utf-8');
-              if (new RegExp(query, 'i').test(content)) {
-                const lines = content.split('\n').filter((l) => new RegExp(query, 'i').test(l));
-                memoryResults.push({ file: note.relativePath, matches: lines.slice(0, 5).join('\n') });
+              if (queryRegex.test(content)) {
+                const lines = content.split('\n').filter((l) => queryRegex.test(l));
+                memoryResults.push({ file: note.relativePath, matches: sanitizeGenericOutput(lines.slice(0, 5).join('\n')) });
               }
             }
           }
         }
         return { type: 'memory_search', ok: true, query, results: memoryResults, count: memoryResults.length };
+      }
+
+      // ── Sequential / write tools ──
+      case 'shell': {
+        const cmd = String(call.directive.command || '');
+        if (!cmd) return { type: 'shell', ok: false, error: 'No command specified' };
+        const r = await runShellCommand(cmd, { cwd: call.directive.cwd, timeout: call.directive.timeout || 30000 });
+        return { type: 'shell', ok: r.ok, output: r.ok ? sanitizeShellOutput(r.stdout) : sanitizeGenericOutput(`${r.error}\n${r.stderr || ''}`), command: r.command, error: r.ok ? null : (r.error || r.stderr || 'shell error') };
+      }
+      case 'write_file': {
+        const fp = String(call.directive.path || '');
+        if (!fp) return { type: 'write_file', ok: false, error: 'No path specified' };
+        const r = writeFileTool(fp, String(call.directive.content || ''), { overwrite: Boolean(call.directive.overwrite) });
+        return { type: 'write_file', ok: r.ok, path: r.ok ? r.path : fp, error: r.ok ? null : r.error };
+      }
+      case 'edit_file': {
+        const fp = String(call.directive.path || '');
+        if (!fp) return { type: 'edit_file', ok: false, error: 'No path specified' };
+        const r = editFileTool(fp, { oldString: String(call.directive.oldString || ''), newString: String(call.directive.newString || ''), replaceAll: Boolean(call.directive.replaceAll), regex: Boolean(call.directive.regex) });
+        return { type: 'edit_file', ok: r.ok, path: r.ok ? r.path : fp, replacements: r.ok ? r.replacements : 0, error: r.ok ? null : r.error };
+      }
+      case 'apply_patch': {
+        const fp = String(call.directive.path || '');
+        if (!fp) return { type: 'apply_patch', ok: false, error: 'No path specified' };
+        const r = applyPatchText(fp, String(call.directive.oldText || ''), String(call.directive.newText || ''), Boolean(call.directive.replaceAll));
+        return { type: 'apply_patch', ok: r.ok, path: r.ok ? r.path : fp, replacements: r.ok ? r.replacements : 0, error: r.ok ? null : r.error };
+      }
+      case 'multi_file_read': {
+        const files = Array.isArray(call.directive.files) ? call.directive.files : [];
+        if (!files.length) return { type: 'multi_file_read', ok: false, error: 'No files specified' };
+        const r = readManyFiles(files);
+        const mappedFiles = r.ok ? r.files.map((f) => {
+          if (f.ok) return { path: f.path, ok: true, content: sanitizeFileOutput(f.content) };
+          // Workspace fallback: try resolving against workspace path for files outside FILE_TOOL_ROOT
+          const wsResolved = path.resolve(getWorkspacePath(), path.basename(f.path || ''));
+          if (wsResolved.startsWith(getWorkspacePath()) && fs.existsSync(wsResolved)) {
+            try {
+              const raw = fs.readFileSync(wsResolved, 'utf-8');
+              return { path: wsResolved, ok: true, content: sanitizeFileOutput(raw.split(/\r?\n/).slice(0, 2000).join('\n')) };
+            } catch (_) { /* fall through to error */ }
+          }
+          return { path: f.path, ok: false, content: f.error };
+        }) : [];
+        return { type: 'multi_file_read', ok: r.ok, files: mappedFiles, error: r.ok ? null : r.error };
+      }
+      case 'git': {
+        const r = await gitHandleAction(String(call.directive.action || 'status'), call.directive.params || {}, String(call.directive.cwd || '.'));
+        return { type: 'git', ok: r.ok, output: r.ok ? sanitizeGenericOutput(r.stdout || JSON.stringify(r)) : sanitizeGenericOutput(r.error), action: call.directive.action, error: r.ok ? null : r.error };
+      }
+      case 'task': {
+        const r = handleTaskAction(taskState, String(call.directive.action || 'list'), call.directive.params || {});
+        const rawOutput = r.ok ? JSON.stringify(r.task || r.tasks || r.summary || r) : r.error;
+        return { type: 'task', ok: r.ok, output: sanitizeGenericOutput(rawOutput), error: r.ok ? null : r.error };
       }
       default:
         return { type: call.type, ok: false, error: `Tool sconosciuto: ${call.type}` };
@@ -7625,71 +7395,22 @@ async function executeSingleTool(call) {
   }
 }
 
+/**
+ * Execute a batch of tool calls — parallel for read-only, sequential for write tools.
+ *
+ * @param {Array<{type: string, directive: Object}>} toolCalls - Tool calls to execute
+ * @returns {Promise<Object[]>} Array of sanitized tool results
+ */
 async function executeToolCalls(toolCalls) {
   const readOnly = toolCalls.filter((c) => READ_ONLY_TOOL_TYPES.has(c.type));
   const sequential = toolCalls.filter((c) => !READ_ONLY_TOOL_TYPES.has(c.type));
 
-  const readOnlyResults = await Promise.all(readOnly.map(executeSingleTool));
+  const readOnlyResults = await Promise.all(readOnly.map(executeToolCall));
   const sequentialResults = [];
 
   for (const call of sequential) {
-    if (!call || !call.type || !call.directive) {
-      sequentialResults.push({ type: call?.type || 'unknown', ok: false, error: 'Tool call missing type or directive' });
-      continue;
-    }
-    try {
-      switch (call.type) {
-        case 'shell': {
-          const cmd = String(call.directive.command || '');
-          if (!cmd) { sequentialResults.push({ type: 'shell', ok: false, error: 'No command specified' }); break; }
-          const r = await runShellCommand(cmd, { cwd: call.directive.cwd, timeout: call.directive.timeout || 30000 });
-          sequentialResults.push({ type: 'shell', ok: r.ok, output: r.ok ? r.stdout : `${r.error}\n${r.stderr || ''}`, command: r.command });
-          break;
-        }
-        case 'write_file': {
-          const fp = String(call.directive.path || '');
-          if (!fp) { sequentialResults.push({ type: 'write_file', ok: false, error: 'No path specified' }); break; }
-          const r = writeFileTool(fp, String(call.directive.content || ''), { overwrite: Boolean(call.directive.overwrite) });
-          sequentialResults.push({ type: 'write_file', ok: r.ok, path: r.ok ? r.path : fp, error: r.ok ? null : r.error });
-          break;
-        }
-        case 'edit_file': {
-          const fp = String(call.directive.path || '');
-          if (!fp) { sequentialResults.push({ type: 'edit_file', ok: false, error: 'No path specified' }); break; }
-          const r = editFileTool(fp, { oldString: String(call.directive.oldString || ''), newString: String(call.directive.newString || ''), replaceAll: Boolean(call.directive.replaceAll), regex: Boolean(call.directive.regex) });
-          sequentialResults.push({ type: 'edit_file', ok: r.ok, path: r.ok ? r.path : fp, replacements: r.ok ? r.replacements : 0, error: r.ok ? null : r.error });
-          break;
-        }
-        case 'apply_patch': {
-          const fp = String(call.directive.path || '');
-          if (!fp) { sequentialResults.push({ type: 'apply_patch', ok: false, error: 'No path specified' }); break; }
-          const r = applyPatchText(fp, String(call.directive.oldText || ''), String(call.directive.newText || ''), Boolean(call.directive.replaceAll));
-          sequentialResults.push({ type: 'apply_patch', ok: r.ok, path: r.ok ? r.path : fp, replacements: r.ok ? r.replacements : 0, error: r.ok ? null : r.error });
-          break;
-        }
-        case 'multi_file_read': {
-          const files = Array.isArray(call.directive.files) ? call.directive.files : [];
-          if (!files.length) { sequentialResults.push({ type: 'multi_file_read', ok: false, error: 'No files specified' }); break; }
-          const r = readManyFiles(files);
-          sequentialResults.push({ type: 'multi_file_read', ok: r.ok, files: r.ok ? r.files.map((f) => ({ path: f.path, ok: f.ok, content: f.ok ? f.content : f.error })) : [], error: r.ok ? null : r.error });
-          break;
-        }
-        case 'git': {
-          const r = await gitHandleAction(String(call.directive.action || 'status'), call.directive.params || {}, String(call.directive.cwd || '.'));
-          sequentialResults.push({ type: 'git', ok: r.ok, output: r.ok ? (r.stdout || JSON.stringify(r)) : r.error, action: call.directive.action });
-          break;
-        }
-        case 'task': {
-          const r = handleTaskAction(taskState, String(call.directive.action || 'list'), call.directive.params || {});
-          sequentialResults.push({ type: 'task', ok: r.ok, output: r.ok ? JSON.stringify(r.task || r.tasks || r.summary || r) : r.error });
-          break;
-        }
-        default:
-          sequentialResults.push({ type: call.type, ok: false, error: `Tool sconosciuto: ${call.type}` });
-      }
-    } catch (error) {
-      sequentialResults.push({ type: call.type, ok: false, error: error.message });
-    }
+    // eslint-disable-next-line no-await-in-loop
+    sequentialResults.push(await executeToolCall(call));
   }
 
   return [...readOnlyResults, ...sequentialResults];
@@ -7832,11 +7553,114 @@ function buildBrowserSnapshotSummary(snapshotItems = []) {
   };
 }
 
+function buildBrowserActionExecutionResult(directive = {}, browserResult = {}, fallbackState = canvasState) {
+  const action = directive?.action || '';
+  if (browserResult?.ok === false) {
+    return {
+      type: 'browser',
+      ok: false,
+      action,
+      error: sanitizeGenericOutput(browserResult.error),
+      warning: sanitizeGenericOutput(browserResult?.warning || ''),
+      warnings: [sanitizeGenericOutput(browserResult?.warning || browserResult?.error || '')].filter(Boolean),
+    };
+  }
+
+  const browserContent = browserResult?.state?.content || fallbackState.content || {};
+  const currentUrl = sanitizeGenericOutput(String(browserContent.currentUrl || browserContent.url || '').trim());
+  const pageTitle = sanitizeGenericOutput(String(browserContent.pageTitle || browserContent.title || '').trim());
+  const pageStatus = String(browserContent.status || '').trim();
+  const snapshotSummary = buildBrowserSnapshotSummary(browserContent.snapshotItems);
+
+  return {
+    type: 'browser',
+    ok: true,
+    action,
+    currentUrl,
+    pageTitle,
+    pageStatus,
+    page: {
+      url: currentUrl,
+      title: pageTitle,
+      status: pageStatus,
+    },
+    totalRefs: Array.isArray(browserContent.snapshotItems) ? browserContent.snapshotItems.length : null,
+    textPreview: sanitizeGenericOutput(normalizeLine(browserContent.text || '', 800)),
+    hasMoreText: String(browserContent.text || '').length > 800,
+    snapshotSummary: sanitizeGenericOutput(snapshotSummary.summary),
+    snapshotRefs: snapshotSummary.refs.map((r) => sanitizeGenericOutput(r)),
+    warning: sanitizeGenericOutput(browserResult?.warning || ''),
+    warnings: [sanitizeGenericOutput(browserResult?.warning || ''), sanitizeGenericOutput(String(browserContent.message || '').trim())].filter(Boolean),
+  };
+}
+
+function formatToolListForSpeech(tools = []) {
+  const uniqueTools = Array.from(new Set((Array.isArray(tools) ? tools : []).map((tool) => String(tool || '').trim()).filter(Boolean)));
+  if (!uniqueTools.length) return 'gli strumenti richiesti';
+  if (uniqueTools.length === 1) return uniqueTools[0];
+  if (uniqueTools.length === 2) return `${uniqueTools[0]} e ${uniqueTools[1]}`;
+  return `${uniqueTools.slice(0, -1).join(', ')} e ${uniqueTools[uniqueTools.length - 1]}`;
+}
+
+function buildAutoToolBatchStartText(actionCalls = [], dataToolCalls = []) {
+  const allCalls = [...actionCalls, ...dataToolCalls];
+  const toolNames = allCalls.map((call) => call.type);
+  if (!toolNames.length) return '';
+
+  const hasBrowser = toolNames.includes('browser');
+  const hasComputer = toolNames.includes('computer');
+  const hasBrowserFormAction = actionCalls.some((call) => call.type === 'browser'
+    && ['click', 'type', 'fill', 'press', 'focus'].includes(String(call.directive?.action || '').trim().toLowerCase()));
+  const hasReadOnlyBatch = toolNames.every((tool) => READ_ONLY_TOOL_TYPES.has(tool));
+
+  if (hasBrowserFormAction && hasComputer) {
+    return 'Parto dal browser, aggiorno i ref della pagina e provo prima la compilazione del form li. Se non basta, passo al computer come fallback.';
+  }
+  if (hasBrowserFormAction) {
+    return 'Aggiorno lo snapshot del browser e provo a compilare il form usando i ref della pagina.';
+  }
+  if (hasBrowser) {
+    return 'Sto lavorando nel browser e aggiorno il contesto della pagina mentre procedo.';
+  }
+  if (hasComputer) {
+    return 'Procedo sul desktop e ti tengo aggiornato mentre eseguo i passaggi.';
+  }
+  if (hasReadOnlyBatch) {
+    return `Faccio una verifica rapida con ${formatToolListForSpeech(toolNames)} e poi ti aggiorno.`;
+  }
+  return `Eseguo ${formatToolListForSpeech(toolNames)} e ti aggiorno appena ho il risultato.`;
+}
+
+function buildAutoToolBatchCompleteText(toolResults = []) {
+  const results = Array.isArray(toolResults) ? toolResults : [];
+  if (!results.length) return '';
+  const failed = results.filter((result) => !result.ok);
+  const successful = results.filter((result) => result.ok);
+  const toolNames = results.map((result) => result.type);
+
+  if (failed.length) {
+    const firstError = normalizeLine(failed[0]?.error || 'errore sconosciuto', 160);
+    return `Ho finito questo passaggio, ma c e stato un problema con ${formatToolListForSpeech(failed.map((result) => result.type))}: ${firstError}.`;
+  }
+
+  const browserOk = successful.find((result) => result.type === 'browser');
+  if (browserOk?.totalRefs != null) {
+    return `Passaggio completato nel browser. Ora ho ${browserOk.totalRefs} ref disponibili e posso continuare da li.`;
+  }
+
+  const computerOk = successful.find((result) => result.type === 'computer');
+  if (computerOk?.windowTitle) {
+    return `Passaggio completato sul desktop. La finestra attiva ora e ${sanitizeGenericOutput(normalizeLine(computerOk.windowTitle, 80))}.`;
+  }
+
+  return `Passaggio completato con ${formatToolListForSpeech(toolNames)}. Continuo con il prossimo step.`;
+}
+
 function buildComputerInteractiveSummary(elements = []) {
   const items = Array.isArray(elements) ? elements.filter(Boolean) : [];
   const topControls = items
     .slice(0, 8)
-    .map((item) => `${item.controlId ?? 'control'} | ${item.elementType || 'element'} | ${normalizeLine(item.label || '', 100)}`);
+    .map((item) => `${item.controlId ?? 'control'} | ${item.elementType || 'element'} | ${sanitizeGenericOutput(normalizeLine(item.label || '', 100))}`);
   return {
     summary: items.length ? `${items.length} controlli interattivi rilevati` : 'nessun controllo interattivo rilevato',
     topControls,
@@ -7846,7 +7670,7 @@ function buildComputerInteractiveSummary(elements = []) {
 function buildWindowSummary(windows = []) {
   return (Array.isArray(windows) ? windows : [])
     .slice(0, 6)
-    .map((item) => `${normalizeLine(item.title || 'window', 80)}${item.process ? ` (${normalizeLine(item.process, 40)})` : ''}`);
+    .map((item) => `${sanitizeGenericOutput(normalizeLine(item.title || 'window', 80))}${item.process ? ` (${sanitizeGenericOutput(normalizeLine(item.process, 40))})` : ''}`);
 }
 
 async function agentLoop(requestId, userText, prompt, sessionInfo, options = {}) {
@@ -7870,193 +7694,277 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
       streamPreview: turnCount === 1,
     });
 
-    if (!turn.response || !turn.response.sequence) {
+    const phasePlan = turn.phasePlan || normalizeLegacyResponseToPhasePlan(turn.response, userText);
+    const phases = Array.isArray(phasePlan?.phases) ? phasePlan.phases : [];
+
+    if (!phases.length) {
       lastResponse = turn.response;
       break;
     }
 
-    let dataToolCalls = extractToolCalls(turn.response.sequence);
-    let actionCalls = extractActionCalls(turn.response.sequence);
+    let nextPromptAfterTools = null;
+    let shouldContinueLoop = false;
 
-    if (!dataToolCalls.length && !actionCalls.length) {
-      lastResponse = turn.response;
-      break;
-    }
+    for (const phase of phases) {
+      const phaseId = String(phase?.phaseId || `phase-${turnCount}`).trim() || `phase-${turnCount}`;
+      const phaseKind = String(phase?.kind || 'message').trim().toLowerCase();
 
-    const { available: executableActionCalls, blocked: blockedActionCalls } = partitionAvailableToolCalls(actionCalls);
-    const { available: executableDataToolCalls, blocked: blockedDataToolCalls } = partitionAvailableToolCalls(dataToolCalls);
-    const blockedResults = [...blockedActionCalls, ...blockedDataToolCalls];
-    if (blockedResults.length) {
-      allToolResults.push(...blockedResults);
-    }
-    const actionExecutionResults = [];
-
-    // Execute action tools (act, delay, browser, computer, canvas, workspace)
-    for (const actionCall of executableActionCalls) {
-      if (actionCall.type === 'act' || actionCall.type === 'delay') {
-        // These stay in the sequence for playResponseSequence
+      if (phaseKind === 'status') {
+        emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
+          type: 'phase_status',
+          message: {
+            id: createMessageId('system'),
+            requestId,
+            phaseId,
+            phaseKind,
+            role: 'system',
+            text: phase.statusText || '',
+            ts: new Date().toISOString(),
+          },
+        });
+        if (phase.speak === true) {
+          // eslint-disable-next-line no-await-in-loop
+          await emitSpokenStatusUpdate(requestId, phaseId, phase.statusText, { emotion: 'think', gesture: 'index' });
+        }
         continue;
       }
-      if (actionCall.type === 'browser') {
-        // eslint-disable-next-line no-await-in-loop
-        const browserResult = await handleBrowserDirective(actionCall.directive);
-        if (browserResult?.ok === false) {
-          actionExecutionResults.push({
-            type: 'browser',
-            ok: false,
-            action: actionCall.directive?.action || '',
-            error: browserResult.error,
-            warning: browserResult?.warning || '',
-            warnings: [browserResult?.warning || browserResult?.error || ''].filter(Boolean),
-          });
-        } else {
-          const browserContent = browserResult?.state?.content || canvasState.content || {};
-          const snapshotSummary = buildBrowserSnapshotSummary(browserContent.snapshotItems);
-          actionExecutionResults.push({
-            type: 'browser',
-            ok: true,
-            action: actionCall.directive?.action || '',
-            currentUrl: String(browserContent.currentUrl || browserContent.url || '').trim(),
-            pageTitle: String(browserContent.pageTitle || browserContent.title || '').trim(),
-            pageStatus: String(browserContent.status || '').trim(),
-            page: {
-              url: String(browserContent.currentUrl || browserContent.url || '').trim(),
-              title: String(browserContent.pageTitle || browserContent.title || '').trim(),
-              status: String(browserContent.status || '').trim(),
-            },
-            totalRefs: Array.isArray(browserContent.snapshotItems) ? browserContent.snapshotItems.length : null,
-            textPreview: normalizeLine(browserContent.text || '', 800),
-            hasMoreText: String(browserContent.text || '').length > 800,
-            snapshotSummary: snapshotSummary.summary,
-            snapshotRefs: snapshotSummary.refs,
-            warning: browserResult?.warning || '',
-            warnings: [browserResult?.warning || '', String(browserContent.message || '').trim()].filter(Boolean),
-          });
+
+      if (phaseKind === 'message') {
+        if (phase.response?.sequence?.length) {
+          lastResponse = phase.response;
+          emitPhaseStreamEvent(requestId, phaseId, phaseKind, { type: 'phase_started' });
+          // eslint-disable-next-line no-await-in-loop
+          await emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, phase.response);
         }
-      } else if (actionCall.type === 'computer') {
-        // eslint-disable-next-line no-await-in-loop
-        const computerResult = await handleComputerDirective({ ...actionCall.directive, requestId });
-        if (computerResult?.ok === false) {
-          actionExecutionResults.push({
-            type: 'computer',
-            ok: false,
-            action: actionCall.directive?.action || '',
-            error: computerResult.error,
-            note: computerResult?.warning || '',
-            warnings: [computerResult?.warning || computerResult?.error || ''].filter(Boolean),
-          });
-        } else {
-          const interactiveSummary = buildComputerInteractiveSummary(computerState.interactiveElements);
-          actionExecutionResults.push({
-            type: 'computer',
-            ok: true,
-            action: actionCall.directive?.action || '',
-            windowTitle: String(computerResult?.windowTitle || computerResult?.title || '').trim(),
-            note: String(computerResult?.message || computerResult?.warning || '').trim(),
-            interactiveSummary: interactiveSummary.summary,
-            topControls: interactiveSummary.topControls,
-            windowSummary: buildWindowSummary(computerState.windows),
-            warnings: [computerResult?.warning || ''].filter(Boolean),
-          });
+        continue;
+      }
+
+      if (phaseKind === 'blocked') {
+        if (phase.response?.sequence?.length) {
+          lastResponse = phase.response;
+          emitPhaseStreamEvent(requestId, phaseId, phaseKind, { type: 'phase_started' });
+          // eslint-disable-next-line no-await-in-loop
+          await emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, phase.response);
         }
-      } else if (actionCall.type === 'workspace') {
-        const workspaceResult = applyWorkspaceUpdate(actionCall.directive);
-        if (workspaceResult?.ok === false) {
+        return { cancelled: false, blocked: true, lastResponse, turns: turnCount, toolResults: allToolResults };
+      }
+
+      if (phaseKind === 'final') {
+        if (phase.response?.sequence?.length) {
+          lastResponse = phase.response;
+          emitPhaseStreamEvent(requestId, phaseId, phaseKind, { type: 'phase_started' });
+          // eslint-disable-next-line no-await-in-loop
+          await emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, phase.response);
+        }
+        return { cancelled: false, completed: true, lastResponse, turns: turnCount, toolResults: allToolResults };
+      }
+
+      if (phaseKind !== 'tool_batch') {
+        continue;
+      }
+
+      const phaseSequence = Array.isArray(phase.sequence) ? phase.sequence : [];
+      const dataToolCalls = extractToolCalls(phaseSequence);
+      const actionCalls = extractActionCalls(phaseSequence);
+      const { available: executableActionCalls, blocked: blockedActionCalls } = partitionAvailableToolCalls(actionCalls);
+      const { available: executableDataToolCalls, blocked: blockedDataToolCalls } = partitionAvailableToolCalls(dataToolCalls);
+      const blockedResults = [...blockedActionCalls, ...blockedDataToolCalls];
+      if (blockedResults.length) {
+        allToolResults.push(...blockedResults);
+      }
+      const actionExecutionResults = [];
+      const executableToolNames = [...executableActionCalls, ...executableDataToolCalls].map((call) => call.type);
+      const autoStartText = buildAutoToolBatchStartText(executableActionCalls, executableDataToolCalls);
+
+      if (autoStartText) {
+        // eslint-disable-next-line no-await-in-loop
+        await emitSpokenStatusUpdate(requestId, phaseId, autoStartText, {
+          emotion: executableToolNames.includes('browser') ? 'think' : 'neutral',
+          gesture: executableToolNames.includes('browser') ? 'index' : undefined,
+        });
+      }
+
+      emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
+        type: 'phase_tool_start',
+        tools: executableToolNames,
+        turn: turnCount,
+      });
+
+      for (const actionCall of executableActionCalls) {
+        if (actionCall.type === 'avatar' || actionCall.type === 'delay') {
+          continue;
+        }
+        if (actionCall.type === 'browser') {
+          // eslint-disable-next-line no-await-in-loop
+          const browserResult = await handleBrowserDirective(actionCall.directive);
+          actionExecutionResults.push(buildBrowserActionExecutionResult(actionCall.directive, browserResult, canvasState));
+        } else if (actionCall.type === 'computer') {
+          // eslint-disable-next-line no-await-in-loop
+          const computerResult = await handleComputerDirective({ ...actionCall.directive, requestId });
+          if (computerResult?.ok === false) {
+            actionExecutionResults.push({
+              type: 'computer',
+              ok: false,
+              action: actionCall.directive?.action || '',
+              error: sanitizeGenericOutput(computerResult.error),
+              note: sanitizeGenericOutput(computerResult?.warning || ''),
+              warnings: [sanitizeGenericOutput(computerResult?.warning || computerResult?.error || '')].filter(Boolean),
+            });
+          } else {
+            const interactiveSummary = buildComputerInteractiveSummary(computerState.interactiveElements);
+            actionExecutionResults.push({
+              type: 'computer',
+              ok: true,
+              action: actionCall.directive?.action || '',
+              windowTitle: sanitizeGenericOutput(String(computerResult?.windowTitle || computerResult?.title || '').trim()),
+              note: sanitizeGenericOutput(String(computerResult?.message || computerResult?.warning || '').trim()),
+              interactiveSummary: interactiveSummary.summary,
+              topControls: interactiveSummary.topControls,
+              windowSummary: buildWindowSummary(computerState.windows),
+              warnings: [sanitizeGenericOutput(computerResult?.warning || '')].filter(Boolean),
+            });
+          }
+        } else if (actionCall.type === 'workspace') {
+          const workspaceResult = applyWorkspaceUpdate(actionCall.directive);
+          if (workspaceResult?.ok === false) {
+            actionExecutionResults.push({
+              type: 'workspace',
+              ok: false,
+              error: workspaceResult.error,
+              mode: String(actionCall.directive?.mode || 'append').trim(),
+              warnings: [workspaceResult.error || ''].filter(Boolean),
+            });
+          } else {
+            actionExecutionResults.push({
+              type: 'workspace',
+              ok: true,
+              file: workspaceResult.file || '',
+              path: workspaceResult.path || '',
+              skipped: Boolean(workspaceResult.skipped),
+              mode: String(actionCall.directive?.mode || 'append').trim(),
+              summary: workspaceResult.skipped ? 'contenuto gia presente, nessuna modifica applicata' : 'workspace aggiornato con successo',
+              warnings: [],
+            });
+          }
+        } else if (actionCall.type === 'canvas') {
+          // eslint-disable-next-line no-await-in-loop
+          await handleCanvasDirective(actionCall.directive);
           actionExecutionResults.push({
-            type: 'workspace',
-            ok: false,
-            error: workspaceResult.error,
-            mode: String(actionCall.directive?.mode || 'append').trim(),
-            warnings: [workspaceResult.error || ''].filter(Boolean),
-          });
-        } else {
-          actionExecutionResults.push({
-            type: 'workspace',
+            type: 'canvas',
             ok: true,
-            file: workspaceResult.file || '',
-            path: workspaceResult.path || '',
-            skipped: Boolean(workspaceResult.skipped),
-            mode: String(actionCall.directive?.mode || 'append').trim(),
-            summary: workspaceResult.skipped
-              ? 'contenuto gia presente, nessuna modifica applicata'
-              : 'workspace aggiornato con successo',
+            contentType: String(canvasState.content?.type || '').trim(),
+            title: String(canvasState.content?.title || '').trim(),
+            summary: canvasState.content?.type === 'browser'
+              ? `browser canvas attivo su ${String(canvasState.content?.pageTitle || canvasState.content?.title || 'Browser').trim()}`
+              : `canvas aggiornato con contenuto ${String(canvasState.content?.type || 'unknown').trim()}`,
             warnings: [],
           });
         }
-      } else if (actionCall.type === 'canvas') {
-        // eslint-disable-next-line no-await-in-loop
-        await handleCanvasDirective(actionCall.directive);
-        actionExecutionResults.push({
-          type: 'canvas',
-          ok: true,
-          contentType: String(canvasState.content?.type || '').trim(),
-          title: String(canvasState.content?.title || '').trim(),
-          summary: canvasState.content?.type === 'browser'
-            ? `browser canvas attivo su ${String(canvasState.content?.pageTitle || canvasState.content?.title || 'Browser').trim()}`
-            : `canvas aggiornato con contenuto ${String(canvasState.content?.type || 'unknown').trim()}`,
-          warnings: [],
-        });
       }
-    }
 
-    if (actionExecutionResults.length) {
-      allToolResults.push(...actionExecutionResults);
-    }
-    const nonSpeechToolResults = [...blockedResults, ...actionExecutionResults];
+      if (actionExecutionResults.length) {
+        allToolResults.push(...actionExecutionResults);
+      }
+      const nonSpeechToolResults = [...blockedResults, ...actionExecutionResults];
 
-    if (!executableDataToolCalls.length) {
-      if (nonSpeechToolResults.length) {
-        emitChatStream({
-          type: nonSpeechToolResults.some((result) => !result.ok) ? 'tool_error' : 'tool_complete',
-          requestId,
-          ...(nonSpeechToolResults.some((result) => !result.ok)
-            ? { errors: nonSpeechToolResults.filter((result) => !result.ok).map((result) => `${result.type}: ${result.error}`).join('; ') }
-            : { tools: nonSpeechToolResults.map((result) => result.type) }),
-          turn: turnCount,
-        });
-        await emitIntermediateAssistantResponse(requestId, userText, turn.response);
-        const refreshedPrompt = rebuildPrompt(userText);
-        currentPrompt = [
-          refreshedPrompt,
-          '',
-          `--- TURN ${turnCount} TOOL RESULTS ---`,
-          buildToolResultPrompt(nonSpeechToolResults, userText),
-        ].join('\n\n');
+      if (!executableDataToolCalls.length) {
+        if (nonSpeechToolResults.length) {
+          emitPhaseStreamEvent(
+            requestId,
+            phaseId,
+            phaseKind,
+            nonSpeechToolResults.some((result) => !result.ok)
+              ? {
+                type: 'phase_tool_error',
+                errors: nonSpeechToolResults.filter((result) => !result.ok).map((result) => `${result.type}: ${result.error}`).join('; '),
+                turn: turnCount,
+              }
+              : {
+                type: 'phase_tool_complete',
+                tools: nonSpeechToolResults.map((result) => result.type),
+                turn: turnCount,
+              }
+          );
+
+          const autoCompleteText = buildAutoToolBatchCompleteText(nonSpeechToolResults);
+          if (autoCompleteText) {
+            // eslint-disable-next-line no-await-in-loop
+            await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, {
+              emotion: nonSpeechToolResults.some((result) => !result.ok) ? 'fear' : 'happy',
+              gesture: nonSpeechToolResults.some((result) => !result.ok) ? 'shrug' : 'thumbup',
+              hand: nonSpeechToolResults.some((result) => !result.ok) ? 'both' : 'right',
+            });
+          }
+
+          const refreshedPrompt = rebuildPrompt(userText);
+          nextPromptAfterTools = [
+            refreshedPrompt,
+            '',
+            `--- TURN ${turnCount} PHASE ${phaseId} TOOL RESULTS ---`,
+            buildToolResultPrompt(nonSpeechToolResults, userText),
+          ].join('\n\n');
+          shouldContinueLoop = true;
+        }
         continue;
       }
-      // Only action tools, no data tools — finalize response
-      lastResponse = turn.response;
+
+      const results = await executeToolCalls(executableDataToolCalls);
+      const combinedResults = [...nonSpeechToolResults, ...results];
+      allToolResults.push(...results);
+      const hasErrors = combinedResults.some((r) => !r.ok);
+
+      emitPhaseStreamEvent(
+        requestId,
+        phaseId,
+        phaseKind,
+        hasErrors
+          ? {
+            type: 'phase_tool_error',
+            errors: combinedResults.filter((r) => !r.ok).map((r) => `${r.type}: ${r.error}`).join('; '),
+            turn: turnCount,
+          }
+          : {
+            type: 'phase_tool_complete',
+            tools: combinedResults.map((r) => r.type),
+            turn: turnCount,
+          }
+      );
+
+      const autoCompleteText = buildAutoToolBatchCompleteText(combinedResults);
+      if (autoCompleteText) {
+        // eslint-disable-next-line no-await-in-loop
+        await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, {
+          emotion: hasErrors ? 'fear' : 'happy',
+          gesture: hasErrors ? 'shrug' : 'thumbup',
+          hand: hasErrors ? 'both' : 'right',
+        });
+      }
+
+      const refreshedPrompt = rebuildPrompt(userText);
+      nextPromptAfterTools = [
+        refreshedPrompt,
+        '',
+        `--- TURN ${turnCount} PHASE ${phaseId} TOOL RESULTS ---`,
+        buildToolResultPrompt(combinedResults, userText),
+      ].join('\n\n');
+      shouldContinueLoop = true;
       break;
     }
 
-    emitChatStream({ type: 'tool_start', requestId, tools: executableDataToolCalls.map((t) => t.type), turn: turnCount });
-
-    const results = await executeToolCalls(executableDataToolCalls);
-    const combinedResults = [...nonSpeechToolResults, ...results];
-    allToolResults.push(...results);
-
-    const hasErrors = combinedResults.some((r) => !r.ok);
-    if (hasErrors) {
-      const errorMessages = combinedResults.filter((r) => !r.ok).map((r) => `${r.type}: ${r.error}`).join('; ');
-      emitChatStream({ type: 'tool_error', requestId, errors: errorMessages, turn: turnCount });
-    } else {
-      emitChatStream({ type: 'tool_complete', requestId, tools: results.map((r) => r.type), turn: turnCount });
+    if (shouldContinueLoop) {
+      currentPrompt = nextPromptAfterTools || rebuildPrompt(userText);
+      continue;
     }
 
-    const refreshedPrompt = rebuildPrompt(userText);
-    currentPrompt = [
-      refreshedPrompt,
-      '',
-      `--- TURN ${turnCount} TOOL RESULTS ---`,
-      buildToolResultPrompt(combinedResults, userText),
-    ].join('\n\n');
+    lastResponse = turn.response || lastResponse;
+    break;
   }
 
   if (turnCount >= MAX_AGENT_TURNS) {
     emitSystemChatStream(requestId, `Agent loop: massimo ${MAX_AGENT_TURNS} turni raggiunto.`);
   }
 
-  return { cancelled: false, lastResponse, turns: turnCount, toolResults: allToolResults };
+  return { cancelled: false, completed: false, lastResponse, turns: turnCount, toolResults: allToolResults };
 }
 
 async function startDirectAcpRequest(requestId, userText) {
@@ -8097,6 +8005,7 @@ async function startDirectAcpRequest(requestId, userText) {
     const result = await agentLoop(requestId, userText, prompt, sessionInfo, {
       rebuildPrompt: buildDirectAcpPrompt,
       streamPreview: launch.kind !== 'ollama-http',
+      strictJson: true,
     });
 
     if (result.cancelled) {
@@ -8112,12 +8021,11 @@ async function startDirectAcpRequest(requestId, userText) {
       activeChatRequest.streamEmitter?.stop();
       activeChatRequest = null;
     }
-
-    if (result.lastResponse && typeof result.lastResponse === 'object') {
-      await finalizeParsedAssistantReply(requestId, userText, result.lastResponse, { id: finalSessionId });
-    } else if (result.lastResponse?.buffer) {
-      await finalizeAssistantReply(requestId, userText, result.lastResponse.buffer, { id: finalSessionId });
-    }
+    markAcpSessionTurnCompleted(finalSessionId);
+    consumeStartupBootPrompt();
+    setStatus('idle');
+    setBrainMode('direct-acp-ready');
+    setStreamStatus(STREAM_STATUS.CONNECTED);
   } catch (error) {
     const active = activeChatRequest;
     const cancelled = Boolean(active?.cancelled);
@@ -8208,7 +8116,7 @@ async function startBootstrapAcpRequest(requestId, userText, options = {}) {
 
   try {
     const prompt = buildBootstrapAcpPrompt(userText, options);
-    const turn = await runAcpTurn(requestId, prompt, userText, sessionInfo, { streamPreview: true });
+    const turn = await runAcpTurn(requestId, prompt, userText, sessionInfo, { streamPreview: true, strictJson: true });
 
     if (activeChatRequest?.id === requestId) {
       activeChatRequest.streamEmitter?.stop();
@@ -8287,204 +8195,73 @@ function reportDetachedAsyncError(context, error, requestId = null) {
 function loadRendererWindow(targetWindow, screenName) {
   const loadPromise = isDev
     ? targetWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?screen=${encodeURIComponent(screenName)}`)
-    : targetWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), {
-      query: { screen: screenName },
-    });
+    : targetWindow.loadURL(`app://app/index.html?screen=${encodeURIComponent(screenName)}`);
 
   void Promise.resolve(loadPromise).catch((error) => {
     reportDetachedAsyncError(`loadRendererWindow:${screenName}`, error);
   });
 }
 
-function createAvatarWindow() {
-  const config = getStoredWindowConfig('avatar', true);
 
-  avatarWindow = new BrowserWindow({
-    x: config.bounds.x,
-    y: config.bounds.y,
-    width: config.bounds.width,
-    height: config.bounds.height,
-    minWidth: 720,
-    minHeight: 720,
-    show: false,
-    frame: false,
-    transparent: true,
-    hasShadow: false,
-    title: 'Avatar ACP',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      sandbox: false,
-      nodeIntegration: false,
-      webviewTag: true,
-    },
-  });
 
-  applyAlwaysOnTop(avatarWindow, 'avatar', config.alwaysOnTop);
-  avatarWindow.setFullScreenable(false);
-  avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  avatarWindow.webContents.on('will-attach-webview', (_event, webPreferences, params) => {
-    delete webPreferences.preload;
-    webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
-    params.allowpopups = 'false';
-  });
 
-  avatarWindow.once('ready-to-show', () => {
-    avatarWindow.show();
-    broadcastStatus();
-  });
-  avatarStatusLoop = createRendererLoop({
-    window: avatarWindow,
-    interval: 2000,
-    run: () => sendStatusToWindow(avatarWindow),
-  });
 
-  bindPersistentBounds(avatarWindow);
-  avatarWindow.on('move', () => {
-    syncCanvasToAvatar();
-  });
-  avatarWindow.on('resize', () => {
-    syncCanvasToAvatar();
-  });
-  avatarWindow.on('closed', () => {
-    avatarStatusLoop?.stop();
-    avatarStatusLoop = null;
-    avatarWindow = null;
-  });
 
-  loadRendererWindow(avatarWindow, 'avatar');
-}
-
-function createChatWindow() {
-  const config = getStoredWindowConfig('chat', true);
-
-  chatWindow = new BrowserWindow({
-    x: config.bounds.x,
-    y: config.bounds.y,
-    width: config.bounds.width,
-    height: config.bounds.height,
-    minWidth: 380,
-    minHeight: 640,
-    show: false,
-    frame: true,
-    transparent: false,
-    hasShadow: true,
-    title: 'Avatar ACP Chat',
-    backgroundColor: '#0c111c',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      sandbox: false,
-      nodeIntegration: false,
-      webviewTag: false,
-    },
-  });
-
-  applyAlwaysOnTop(chatWindow, 'chat', config.alwaysOnTop);
-  chatWindow.setFullScreenable(false);
-  chatWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-
-  chatWindow.once('ready-to-show', () => {
-    chatWindow.show();
-    broadcastStatus();
-  });
-  chatStatusLoop = createRendererLoop({
-    window: chatWindow,
-    interval: 2000,
-    run: () => sendStatusToWindow(chatWindow),
-  });
-
-  bindPersistentBounds(chatWindow);
-  chatWindow.on('closed', () => {
-    chatStatusLoop?.stop();
-    chatStatusLoop = null;
-    chatWindow = null;
-  });
-
-  loadRendererWindow(chatWindow, 'chat');
-}
-
-function createCanvasWindow() {
-  const config = getStoredWindowConfig('canvas', false);
-
-  canvasWindow = new BrowserWindow({
-    x: config.bounds.x,
-    y: config.bounds.y,
-    width: config.bounds.width,
-    height: config.bounds.height,
-    minWidth: 380,
-    minHeight: 480,
-    show: false,
-    frame: true,
-    transparent: false,
-    hasShadow: true,
-    title: 'Nyx Canvas',
-    backgroundColor: '#0b1118',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      sandbox: false,
-      nodeIntegration: false,
-      webviewTag: false,
-    },
-  });
-
-  applyAlwaysOnTop(canvasWindow, 'canvas', config.alwaysOnTop);
-  canvasWindow.setFullScreenable(false);
-  canvasWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-
-  canvasWindow.once('ready-to-show', () => {
-    if (canvasState.isOpen) {
-      canvasWindow.show();
-    }
-    sendCanvasState(canvasWindow);
-    broadcastStatus();
-  });
-
-  canvasStatusLoop = createRendererLoop({
-    window: canvasWindow,
-    interval: 2000,
-    run: () => {
-      sendStatusToWindow(canvasWindow);
-      sendCanvasState(canvasWindow);
-    },
-  });
-
-  bindPersistentBounds(canvasWindow);
-  canvasWindow.on('closed', () => {
-    if (canvasState.layout === 'split-50' && canvasState.lastAvatarBoundsBeforeSplit && avatarWindow && !avatarWindow.isDestroyed()) {
-      avatarWindow.setBounds(canvasState.lastAvatarBoundsBeforeSplit);
-    }
-    canvasStatusLoop?.stop();
-    canvasStatusLoop = null;
-    canvasWindow = null;
-    if (canvasState.isOpen) {
-      canvasState.isOpen = false;
-      canvasState.lastAvatarBoundsBeforeSplit = null;
-      persistCanvasState();
-    }
-  });
-
-  loadRendererWindow(canvasWindow, 'canvas');
-}
 
 function ensureWindows() {
-  if (!avatarWindow || avatarWindow.isDestroyed()) {
-    createAvatarWindow();
+  // Create chat window first — it's lighter and initialises faster.
+  if (!wmGetChatWindow() || wmGetChatWindow().isDestroyed()) {
+    const { window, statusLoop } = wmCreateChatWindow(app, {
+      avatarWindow: wmGetAvatarWindow(),
+      onStatusBroadcast: broadcastStatus,
+      getStatePayload: getAppStatePayload,
+    });
+    wmSetChatWindow(window);
+    chatStatusLoop = statusLoop;
   }
 
-  if (!chatWindow || chatWindow.isDestroyed()) {
-    createChatWindow();
+  // Delay avatar window creation so the chat GPU context is fully established
+  // before the heavy WebGL/Three.js context starts — prevents simultaneous
+  // AllocateRingBuffer failures (ERR_INSUFFICIENT_RESOURCES).
+  const needsAvatar = !wmGetAvatarWindow() || wmGetAvatarWindow().isDestroyed();
+  if (needsAvatar) {
+    setTimeout(() => {
+      if (!wmGetAvatarWindow() || wmGetAvatarWindow().isDestroyed()) {
+        const { window, statusLoop } = wmCreateAvatarWindow(app, {
+          onStatusBroadcast: broadcastStatus,
+          onCanvasSync: syncCanvasToAvatar,
+          getStatePayload: getAppStatePayload,
+        });
+        wmSetAvatarWindow(window);
+        avatarStatusLoop = statusLoop;
+      }
+    }, 1500);
   }
 
-  if (ENABLE_LIVE_CANVAS && canvasState.isOpen && (!canvasWindow || canvasWindow.isDestroyed())) {
-    createCanvasWindow();
+  if (ENABLE_LIVE_CANVAS && canvasState.isOpen && (!wmGetCanvasWindow() || wmGetCanvasWindow().isDestroyed())) {
+    const { window, statusLoop } = wmCreateCanvasWindow(app, {
+      avatarWindow: wmGetAvatarWindow(),
+      chatWindow: wmGetChatWindow(),
+      canvasState,
+      onStatusBroadcast: broadcastStatus,
+      getStatePayload: getAppStatePayload,
+    });
+    wmSetCanvasWindow(window);
+    canvasStatusLoop = statusLoop;
   }
 }
 
 app.whenReady().then(() => {
+  installAppProtocol(protocol, electronNet, { distRoot: path.join(__dirname, '..', 'dist') });
+  session.defaultSession.setPermissionRequestHandler(createPermissionRequestHandler());
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = { ...(details.responseHeaders || {}) };
+    if (isTrustedAppUrl(details.url)) {
+      responseHeaders['Content-Security-Policy'] = [buildRendererCsp({ isDev })];
+    }
+    callback({ responseHeaders });
+  });
+
   loadPersistentData();
 
   initializeHooks();
@@ -8510,21 +8287,7 @@ app.whenReady().then(() => {
 
   // Schedule dream mode
   scheduleDream(dreamState, async () => {
-    try {
-      const analysis = analyzeConversation(chatHistory);
-      const note = generateDreamNote(analysis);
-      const dreamPath = path.join(app.getPath('userData'), 'dreams');
-      saveDreamNote(dreamPath, note);
-      cleanupOldDreams(dreamPath);
-
-      // Update personality based on conversation
-      if (chatHistory.length > 2) {
-        const lastUser = chatHistory.filter((m) => m.role === 'user').slice(-1)[0];
-        const lastAssistant = chatHistory.filter((m) => m.role === 'assistant').slice(-1)[0];
-        updatePersonality(personalityState, lastUser?.text || '', lastAssistant?.text || '');
-        savePersonality(personalityPath, personalityState);
-      }
-    } catch {}
+    await runDreamCycle(personalityPath);
   });
 
   if (!ENABLE_LIVE_CANVAS && canvasState.isOpen) {
@@ -8537,56 +8300,61 @@ app.whenReady().then(() => {
   }
   setStreamStatus(hasSelectedBrainLauncher() ? STREAM_STATUS.CONNECTED : STREAM_STATUS.DISCONNECTED);
 
-  ipcMain.handle('app:get-state', async () => getAppStatePayload());
-  ipcMain.handle('brain:set-selected', async (_event, brainId) => setSelectedBrain(brainId));
-  ipcMain.handle('brain:set-ollama-config', async (_event, config) => setOllamaConfig(config || {}));
-  ipcMain.handle('brain:test', async (_event, brainId) => testBrainSelection(brainId));
-  ipcMain.handle('workspace:open-folder', async () => openWorkspaceFolder());
-  ipcMain.handle('workspace:complete-bootstrap', async () => completeWorkspaceBootstrap());
-
-  ipcMain.handle('shell:run', async (_event, command, options = {}) => {
-    const result = await runShellCommand(command, options);
-    return result;
+  registerSafeIpcHandlers(ipcMain, {
+    getAppStatePayload,
+    setSelectedBrain,
+    setOllamaConfig,
+    testBrainSelection,
+    openWorkspaceFolder,
+    completeWorkspaceBootstrap,
+    runShellCommand,
+    stopShellProcess,
+    listShellProcesses,
+    readFileTool,
+    writeFileTool,
+    editFileTool,
+    deleteFileTool,
+    listDirectory,
+    globFiles,
+    grepFiles,
+    readManyFiles,
+    gitHandleAction,
+    webFetch,
+    webSearch,
+    handleTaskAction: (action, params) => handleTaskAction(taskState, action, params),
+    getTaskSummary: () => getTaskSummary(taskState),
+    detectFrustration,
+    getCircuitBreakerStatus: () => getCircuitBreakerStatus(circuitBreakerState),
+    resetCircuitBreaker: () => resetCircuitBreaker(circuitBreakerState),
+    getDreamStatus: () => getDreamStatus(dreamState),
+    getPersonalityState: () => personalityState,
+    getPersonalityPrompt: () => getPersonalityPrompt(personalityState),
+    getPromptStats: () => getPromptStats(promptCacheState),
+    getChatHistory: () => chatHistory,
+    setWindowAlwaysOnTop,
+    readClipboardText: () => clipboard.readText(),
+    writeClipboardText: (text) => {
+      clipboard.writeText(String(text || ''));
+      return { ok: true };
+    },
+    // Avatar typed command infrastructure
+    getAvatarWindow: wmGetAvatarWindow,
+    handleAvatarPlaybackInternal: (_resolvePlaybackWaiter, _makePlaybackKey, _activeResponseId, payload) => {
+      const requestId = String(payload?.requestId || '').trim();
+      const segmentId = String(payload?.segmentId || '').trim();
+      const state = String(payload?.state || '').trim().toLowerCase();
+      if (!requestId || !segmentId) return;
+      const key = makePlaybackKey(requestId, segmentId);
+      if (state === 'ended' || state === 'stopped' || state === 'error') {
+        resolvePlaybackWaiter(key, activeResponseId === requestId && state === 'ended');
+      }
+    },
+    resolvePlaybackWaiter,
+    makePlaybackKey,
+    activeResponseId,
   });
-  ipcMain.handle('shell:stop', async (_event, processId) => stopShellProcess(processId));
-  ipcMain.handle('shell:list', async () => listShellProcesses());
 
-  ipcMain.handle('file:read', async (_event, filePath, options = {}) => readFileTool(filePath, options));
-  ipcMain.handle('file:write', async (_event, filePath, content, options = {}) => writeFileTool(filePath, content, options));
-  ipcMain.handle('file:edit', async (_event, filePath, options = {}) => editFileTool(filePath, options));
-  ipcMain.handle('file:delete', async (_event, filePath) => deleteFileTool(filePath));
-  ipcMain.handle('file:list', async (_event, dirPath) => listDirectory(dirPath));
-
-  ipcMain.handle('search:glob', async (_event, pattern, searchPath = '.') => globFiles(pattern, searchPath));
-  ipcMain.handle('search:grep', async (_event, pattern, searchPath = '.', options = {}) => grepFiles(pattern, searchPath, options));
-  ipcMain.handle('search:multi-read', async (_event, filePaths, options = {}) => readManyFiles(filePaths, options));
-
-  ipcMain.handle('git:run', async (_event, action, params = {}, cwd = '.') => gitHandleAction(action, params, cwd));
-
-  ipcMain.handle('web:fetch', async (_event, url, options = {}) => webFetch(url, options));
-  ipcMain.handle('web:search', async (_event, query, options = {}) => webSearch(query, options));
-
-  ipcMain.handle('task:run', async (_event, action, params = {}) => handleTaskAction(taskState, action, params));
-  ipcMain.handle('task:summary', async () => ({ ok: true, summary: getTaskSummary(taskState) }));
-
-  ipcMain.handle('frustration:detect', async (_event, text) => detectFrustration(text));
-
-  ipcMain.handle('circuit-breaker:status', async () => ({ ok: true, status: getCircuitBreakerStatus(circuitBreakerState) }));
-  ipcMain.handle('circuit-breaker:reset', async () => resetCircuitBreaker(circuitBreakerState));
-
-  ipcMain.handle('dream:status', async () => ({ ok: true, status: getDreamStatus(dreamState) }));
-
-  ipcMain.handle('personality:get', async () => ({ ok: true, personality: personalityState }));
-  ipcMain.handle('personality:prompt', async () => ({ ok: true, prompt: getPersonalityPrompt(personalityState) }));
-
-  ipcMain.handle('prompt:stats', async () => ({ ok: true, stats: getPromptStats(promptCacheState) }));
-
-  ipcMain.handle('chat:get-history', async () => ({
-    ok: true,
-    messages: chatHistory,
-  }));
-
-  ipcMain.handle('canvas:get-state', async () => {
+  registerValidatedIpcHandler(ipcMain, 'canvas:get-state', async () => {
     if (canvasState.content?.type === 'browser') {
       const refreshedContent = await buildCanvasContent(canvasState.content, {
         browser: { navigate: false },
@@ -8604,62 +8372,31 @@ app.whenReady().then(() => {
     };
   });
 
-  ipcMain.handle('window:set-always-on-top', async (_event, target, enabled) => {
-    return setWindowAlwaysOnTop(target, enabled);
-  });
-
-  ipcMain.handle('canvas:open', async (_event, payload) => handleCanvasDirective({ action: 'open', ...(payload || {}) }));
-  ipcMain.handle('canvas:update', async (_event, payload) => handleCanvasDirective({ action: 'open', ...(payload || {}) }));
-  ipcMain.handle('canvas:close', async () => closeCanvas());
-  ipcMain.handle('canvas:set-layout', async (_event, layout) => openCanvas({
+  registerValidatedIpcHandler(ipcMain, 'canvas:open', async (_event, payload) => handleCanvasDirective({ action: 'open', ...(payload || {}) }));
+  registerValidatedIpcHandler(ipcMain, 'canvas:update', async (_event, payload) => handleCanvasDirective({ action: 'open', ...(payload || {}) }));
+  registerValidatedIpcHandler(ipcMain, 'canvas:close', async () => closeCanvas());
+  registerValidatedIpcHandler(ipcMain, 'canvas:set-layout', async (_event, layout) => openCanvas({
     layout,
     content: canvasState.content,
     buildOptions: canvasState.content?.type === 'browser'
       ? { browser: { navigate: false } }
       : {},
   }));
-  ipcMain.handle('browser:navigate', async (_event, payload) => {
-    if (canvasState.isOpen) {
-      closeCanvas();
-    }
-    const result = await refreshBrowserCanvas({
-      ...(canvasState.content?.type === 'browser' ? canvasState.content : {}),
-      type: 'browser',
+  registerValidatedIpcHandler(ipcMain, 'browser:navigate', async (_event, payload) => {
+    return navigateBrowserCanvas({
       title: payload?.title || canvasState.content?.title || 'Browser',
       url: payload?.url || payload?.value || payload?.query || canvasState.content?.url || '',
-    }, { navigate: true, showCanvas: false });
-
-    const browserContent = result?.state?.content || canvasState.content;
-    return {
-      ok: browserContent?.status !== 'error',
-      state: result?.state || canvasState,
-      error: browserContent?.status === 'error' ? browserContent.message : null,
-    };
+    });
   });
-  ipcMain.handle('browser:refresh', async (_event, payload) => {
+  registerValidatedIpcHandler(ipcMain, 'browser:refresh', async (_event, payload) => {
     return refreshBrowserCanvas(payload || {}, { navigate: false, showCanvas: false });
   });
-  ipcMain.handle('browser:action', async (_event, payload) => {
-    return performBrowserAction(payload || {});
+  registerValidatedIpcHandler(ipcMain, 'browser:action', async (_event, payload) => {
+    return baPerformBrowserAction(payload || {}, canvasState, refreshBrowserCanvas);
   });
-  ipcMain.handle('clipboard:read-text', async () => ({ ok: true, text: clipboard.readText() || '' }));
-  ipcMain.handle('clipboard:write-text', async (_event, text) => {
-    clipboard.writeText(String(text || ''));
-    return { ok: true };
-  });
+  registerValidatedIpcHandler(ipcMain, 'chat:stop', async () => stopActiveChatRequest('user-stop'));
 
-  ipcMain.handle('avatar:command', async (_event, command) => {
-    if (avatarWindow && !avatarWindow.isDestroyed()) {
-      avatarWindow.webContents.send('avatar-command', command);
-      return { ok: true };
-    }
-
-    return { ok: false, error: 'Avatar window unavailable' };
-  });
-
-  ipcMain.handle('chat:stop', async () => stopActiveChatRequest('user-stop'));
-
-  ipcMain.handle('chat:send', async (_event, text) => {
+  registerValidatedIpcHandler(ipcMain, 'chat:send', async (_event, text) => {
     const trimmed = String(text || '').trim();
     if (!trimmed) {
       return { ok: false, error: 'Empty message' };
@@ -8695,13 +8432,7 @@ app.whenReady().then(() => {
 
     onUserInteraction(dreamState);
     scheduleDream(dreamState, async () => {
-      try {
-        const analysis = analyzeConversation(chatHistory);
-        const note = generateDreamNote(analysis);
-        const dreamPath = path.join(app.getPath('userData'), 'dreams');
-        saveDreamNote(dreamPath, note);
-        cleanupOldDreams(dreamPath);
-      } catch {}
+      await runDreamCycle(personalityPath);
     });
 
     const userMessage = {
@@ -8760,23 +8491,18 @@ app.whenReady().then(() => {
   });
 
   ensureWindows();
-  void ensureTtsService().catch((error) => {
-    appendTtsServiceLog(error.message || String(error), 'startup');
-  });
+  if (TTS_PROVIDER === 'kokoro' && !ttsWarmupTimer) {
+    ttsWarmupTimer = setTimeout(() => {
+      ttsWarmupTimer = null;
+      void ensureTtsService().catch((error) => {
+        const errorMessage = error?.message || String(error);
+        ttsServiceLogTail = ttsService.getLogTail();
+        appendTtsServiceLog(errorMessage, 'startup');
+      });
+    }, 5000);
+  }
   void ensureQwenAcpRuntime().catch((error) => {
     appendQwenAcpStderr(`Startup ACP init error: ${error.message || String(error)}`);
-  });
-
-  ipcMain.on('avatar:playback', (_event, payload) => {
-    const requestId = String(payload?.requestId || '').trim();
-    const segmentId = String(payload?.segmentId || '').trim();
-    const state = String(payload?.state || '').trim().toLowerCase();
-    if (!requestId || !segmentId) return;
-
-    const key = makePlaybackKey(requestId, segmentId);
-    if (state === 'ended' || state === 'stopped' || state === 'error') {
-      resolvePlaybackWaiter(key, activeResponseId === requestId && state === 'ended');
-    }
   });
 
   app.on('activate', () => {

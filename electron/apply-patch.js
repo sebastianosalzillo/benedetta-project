@@ -1,8 +1,24 @@
 const fs = require('fs');
 const path = require('path');
+const PATCH_ROOT = path.resolve(process.env.NYX_FILE_TOOL_ROOT || process.cwd());
+
+function isPathWithinRoot(rootPath, targetPath) {
+  return targetPath === rootPath || targetPath.startsWith(`${rootPath}${path.sep}`);
+}
+
+function resolvePatchPath(filePath) {
+  const resolvedPath = path.resolve(PATCH_ROOT, String(filePath || ''));
+  if (!isPathWithinRoot(PATCH_ROOT, resolvedPath)) {
+    return null;
+  }
+  return resolvedPath;
+}
 
 function applyPatch(filePath, patch) {
-  const resolvedPath = path.resolve(filePath);
+  const resolvedPath = resolvePatchPath(filePath);
+  if (!resolvedPath) {
+    return { ok: false, error: 'Path fuori dal root consentito del patch tool.' };
+  }
   if (!fs.existsSync(resolvedPath)) {
     return { ok: false, error: `File non trovato: ${resolvedPath}` };
   }
@@ -32,7 +48,10 @@ function applyPatch(filePath, patch) {
 }
 
 function applyPatchText(filePath, oldText, newText, replaceAll = false) {
-  const resolvedPath = path.resolve(filePath);
+  const resolvedPath = resolvePatchPath(filePath);
+  if (!resolvedPath) {
+    return { ok: false, error: 'Path fuori dal root consentito del patch tool.' };
+  }
   if (!fs.existsSync(resolvedPath)) {
     return { ok: false, error: `File non trovato: ${resolvedPath}` };
   }
@@ -68,4 +87,4 @@ function applyPatchText(filePath, oldText, newText, replaceAll = false) {
   }
 }
 
-module.exports = { applyPatch, applyPatchText };
+module.exports = { applyPatch, applyPatchText, resolvePatchPath };

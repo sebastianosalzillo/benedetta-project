@@ -26,16 +26,12 @@ const {
   PINCHTAB_LOCK_FILE,
   PINCHTAB_RECOVERABLE_ERROR_PATTERNS,
 } = require('./constants');
+const { normalizeLine } = require('./workspace-manager');
 
 /**
- * Normalize a line of text to a max length.
- */
-function normalizeLine(text, maxLength) {
-  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
-}
-
-/**
- * Normalize browser URL.
+ * Normalize a URL-like string to a valid URL.
+ * @param {string} urlLike - URL or search term
+ * @returns {string} Normalized URL
  */
 function normalizeBrowserUrl(urlLike) {
   const input = String(urlLike || '').trim();
@@ -48,7 +44,10 @@ function normalizeBrowserUrl(urlLike) {
 }
 
 /**
- * Build browser title from URL.
+ * Build a human-readable browser title from a URL-like value.
+ *
+ * @param {string} urlLike
+ * @returns {string}
  */
 function buildBrowserTitleFromUrl(urlLike) {
   try {
@@ -60,7 +59,10 @@ function buildBrowserTitleFromUrl(urlLike) {
 }
 
 /**
- * Normalize canvas layout alias.
+ * Normalize canvas layout aliases used by browser/canvas directives.
+ *
+ * @param {string} layout
+ * @returns {string}
  */
 function normalizeCanvasLayout(layout) {
   const value = String(layout || '').trim().toLowerCase();
@@ -72,7 +74,10 @@ function normalizeCanvasLayout(layout) {
 }
 
 /**
- * Check if an error is a PinchTab route not found error.
+ * Check whether an error indicates a missing PinchTab route.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
  */
 function isPinchtabRouteNotFoundError(error) {
   const message = String(error?.message || error || '').toLowerCase();
@@ -80,7 +85,10 @@ function isPinchtabRouteNotFoundError(error) {
 }
 
 /**
- * Get global fallback endpoint for PinchTab.
+ * Map a tab-scoped endpoint to a supported global fallback endpoint.
+ *
+ * @param {string} endpoint
+ * @returns {string}
  */
 function getPinchtabGlobalFallbackEndpoint(endpoint) {
   const normalized = String(endpoint || '').trim();
@@ -96,7 +104,10 @@ function getPinchtabGlobalFallbackEndpoint(endpoint) {
 }
 
 /**
- * Check if a PinchTab action error is recoverable.
+ * Check whether a PinchTab action error is recoverable via refresh/rematch flows.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
  */
 function isPinchtabRecoverableActionError(error) {
   const message = String(error?.message || error || '').toLowerCase();
@@ -118,6 +129,11 @@ function hasPinchtabLauncher() {
   return fs.existsSync(PINCHTAB_CLI_PATH) || fs.existsSync(PINCHTAB_PS1_PATH);
 }
 
+/**
+ * Resolve the profile path used for the managed PinchTab browser instance.
+ *
+ * @returns {string}
+ */
 function getPinchtabProfilePath() {
   const { app } = require('electron');
   const profilePath = path.join(app.getPath('userData'), 'pinchtab-profiles', 'avatar-desktop');
@@ -345,6 +361,11 @@ function createPinchtabHeaders(headers = {}) {
   return nextHeaders;
 }
 
+/**
+ * Probe the local PinchTab bridge health endpoint.
+ *
+ * @returns {Promise<Object|null>}
+ */
 async function probePinchtabHealth() {
   try {
     const response = await fetch(`${PINCHTAB_URL}/health`, { headers: createPinchtabHeaders() });
@@ -355,6 +376,11 @@ async function probePinchtabHealth() {
   } catch { return null; }
 }
 
+/**
+ * Stop the managed PinchTab service and clean up its profile state.
+ *
+ * @returns {void}
+ */
 function stopPinchtabService() {
   const { app } = require('electron');
   const profilePath = app?.isReady?.() ? getPinchtabProfilePath() : null;
@@ -368,6 +394,11 @@ function stopPinchtabService() {
   if (profilePath) cleanupPinchtabProfile(profilePath);
 }
 
+/**
+ * Ensure the managed PinchTab bridge is running and responsive.
+ *
+ * @returns {Promise<Object>}
+ */
 async function ensurePinchtabService() {
   const healthy = await probePinchtabHealth();
   if (healthy && !healthy.unauthorized) return healthy;
@@ -423,6 +454,13 @@ async function ensurePinchtabService() {
   try { return await pinchtabStartupPromise; } finally { pinchtabStartupPromise = null; }
 }
 
+/**
+ * Perform a raw HTTP request against the PinchTab bridge.
+ *
+ * @param {string} endpoint
+ * @param {RequestInit} [options]
+ * @returns {Promise<Response>}
+ */
 async function pinchtabRequest(endpoint, options = {}) {
   await ensurePinchtabService();
   let response = await fetch(`${PINCHTAB_URL}${endpoint}`, { ...options, headers: createPinchtabHeaders(options.headers) });
@@ -449,6 +487,13 @@ async function pinchtabRequest(endpoint, options = {}) {
   return response;
 }
 
+/**
+ * Perform a PinchTab request and parse the JSON response.
+ *
+ * @param {string} endpoint
+ * @param {RequestInit} [options]
+ * @returns {Promise<Object>}
+ */
 async function pinchtabRequestJson(endpoint, options = {}) {
   const response = await pinchtabRequest(endpoint, options);
   return response.json().catch(() => ({}));
@@ -591,6 +636,10 @@ function getBrowserSnapshotItemByRef(content = {}, ref = '') {
   return (content?.snapshotItems || []).find((item) => String(item?.ref || '').trim() === targetRef) || null;
 }
 
+function getBrowserTabId(beforeContent = {}, canvasState = {}) {
+  return String(beforeContent?.tabId || canvasState?.content?.tabId || '').trim();
+}
+
 function extractSnapshotItemLabelText(item = {}) {
   const rawLabel = String(item?.label || '').replace(/\s+val="[^"]*"/gi, '').replace(/\s+/g, ' ').trim();
   if (!rawLabel) return '';
@@ -679,8 +728,8 @@ function buildClickFallbackExpression(item = {}) {
   })()`;
 }
 
-async function runBrowserClickFallbacks(ref, beforeContent, item, waitAfterMs, getCanvasState, refreshBrowserCanvas) {
-  const browserTabId = String(beforeContent?.tabId || getCanvasState?.content?.tabId || '').trim();
+async function runBrowserClickFallbacks(ref, beforeContent, item, canvasState, refreshBrowserCanvas) {
+  const browserTabId = getBrowserTabId(beforeContent, canvasState);
   if (!ref || !isClickFallbackCandidate(item)) return null;
 
   try {
@@ -712,8 +761,8 @@ function buildFindQueryFromSnapshotItem(item = {}, action = {}) {
   return [label, value, role].filter(Boolean).join(' ');
 }
 
-async function retryBrowserActionWithFind(action = {}, beforeContent = {}, item = {}, waitAfterMs, getCanvasState, refreshBrowserCanvas, findPinchtabRef) {
-  const browserTabId = String(beforeContent?.tabId || getCanvasState?.content?.tabId || '').trim();
+async function retryBrowserActionWithFind(action = {}, beforeContent = {}, item = {}, canvasState, refreshBrowserCanvas, findPinchtabRef) {
+  const browserTabId = getBrowserTabId(beforeContent, canvasState);
   if (!browserTabId || !action.ref) return null;
   const rematchedRef = await findPinchtabRef(buildFindQueryFromSnapshotItem(item, action), browserTabId);
   if (!rematchedRef || rematchedRef === action.ref) return null;
@@ -722,8 +771,8 @@ async function retryBrowserActionWithFind(action = {}, beforeContent = {}, item 
   return { ok: true, recovered: true, state: refreshed.state, staleRef: true, rematchedRef, warning: `Ref browser aggiornato semanticamente da ${action.ref} a ${rematchedRef}.` };
 }
 
-async function runBrowserInputFallbacks(action = {}, beforeContent = {}, waitAfterMs, getCanvasState, refreshBrowserCanvas) {
-  const browserTabId = String(beforeContent?.tabId || getCanvasState?.content?.tabId || '').trim();
+async function runBrowserInputFallbacks(action = {}, beforeContent = {}, canvasState, refreshBrowserCanvas) {
+  const browserTabId = getBrowserTabId(beforeContent, canvasState);
   const targetItem = getBrowserSnapshotItemByRef(beforeContent, action.ref);
   if (!browserTabId || action.kind !== 'type' || !action.ref || !action.text || !isTextInputFallbackCandidate(targetItem)) return null;
 
@@ -738,9 +787,9 @@ async function runBrowserInputFallbacks(action = {}, beforeContent = {}, waitAft
   return null;
 }
 
-function isYouTubeSearchRef(ref = '', currentUrl = '') {
+function isYouTubeSearchRef(ref = '', currentUrl = '', snapshotItems = []) {
   if (!currentUrl.includes('youtube.com')) return false;
-  const item = getActiveBrowserSnapshotItem(ref);
+  const item = getBrowserSnapshotItemByRef({ snapshotItems }, ref);
   const label = String(item?.label || '').toLowerCase();
   const role = String(item?.role || '').toLowerCase();
   return role.includes('textbox') || label.includes('search') || label.includes('cerca') || label.includes('ricerca');
@@ -755,6 +804,14 @@ function buildYouTubeSearchUrl(queryText = '') {
 // Browser action execution
 // ============================================================
 
+/**
+ * Execute a browser action against the active PinchTab tab/context.
+ *
+ * @param {Object} payload
+ * @param {Object} getCanvasState
+ * @param {Function} refreshBrowserCanvas
+ * @returns {Promise<Object>}
+ */
 async function performBrowserAction(payload = {}, getCanvasState, refreshBrowserCanvas) {
   const kind = String(payload.kind || '').trim().toLowerCase();
   if (!kind) return { ok: false, error: 'Missing browser action kind' };
@@ -782,7 +839,7 @@ async function performBrowserAction(payload = {}, getCanvasState, refreshBrowser
   if (kind === 'press' && !action.key) action.key = 'Enter';
 
   const currentUrl = String(getCanvasState.content?.currentUrl || getCanvasState.content?.url || '');
-  if (['type', 'fill'].includes(kind) && action.ref && action.text && isYouTubeSearchRef(action.ref, currentUrl)) {
+  if (['type', 'fill'].includes(kind) && action.ref && action.text && isYouTubeSearchRef(action.ref, currentUrl, beforeContent.snapshotItems)) {
     return refreshBrowserCanvas({ ...beforeContent, type: 'browser', title: 'youtube.com', url: buildYouTubeSearchUrl(action.text) }, { navigate: true, showCanvas: false });
   }
 
@@ -795,22 +852,22 @@ async function performBrowserAction(payload = {}, getCanvasState, refreshBrowser
     if (kind === 'type' && action.ref && action.text) {
       const typedItem = getBrowserSnapshotItemByRef(refreshed.state?.content, action.ref);
       if (extractSnapshotItemValue(typedItem) !== action.text) {
-        const inputFallbackResult = await runBrowserInputFallbacks(action, beforeContent, payload.waitAfterMs, getCanvasState, refreshBrowserCanvas);
+        const inputFallbackResult = await runBrowserInputFallbacks(action, beforeContent, getCanvasState, refreshBrowserCanvas);
         if (inputFallbackResult) return inputFallbackResult;
       }
     }
     if (kind === 'click' && action.ref && isClickFallbackCandidate(targetSnapshotItem) && !didBrowserClickProgress(beforeContent, refreshed.state?.content || {})) {
-      const fallbackResult = await runBrowserClickFallbacks(action.ref, beforeContent, targetSnapshotItem, payload.waitAfterMs, getCanvasState, refreshBrowserCanvas);
+      const fallbackResult = await runBrowserClickFallbacks(action.ref, beforeContent, targetSnapshotItem, getCanvasState, refreshBrowserCanvas);
       if (fallbackResult) return fallbackResult;
     }
     return refreshed;
   } catch (error) {
     if (action.ref && targetSnapshotItem) {
-      const rematchResult = await retryBrowserActionWithFind(action, beforeContent, targetSnapshotItem, payload.waitAfterMs, getCanvasState, refreshBrowserCanvas, findPinchtabRef).catch(() => null);
+      const rematchResult = await retryBrowserActionWithFind(action, beforeContent, targetSnapshotItem, getCanvasState, refreshBrowserCanvas, findPinchtabRef).catch(() => null);
       if (rematchResult) return rematchResult;
     }
     if (kind === 'click' && action.ref && isClickFallbackCandidate(targetSnapshotItem)) {
-      const fallbackResult = await runBrowserClickFallbacks(action.ref, beforeContent, targetSnapshotItem, payload.waitAfterMs, getCanvasState, refreshBrowserCanvas);
+      const fallbackResult = await runBrowserClickFallbacks(action.ref, beforeContent, targetSnapshotItem, getCanvasState, refreshBrowserCanvas);
       if (fallbackResult) return fallbackResult;
     }
     if (isPinchtabRecoverableActionError(error)) {
@@ -825,9 +882,63 @@ async function performBrowserAction(payload = {}, getCanvasState, refreshBrowser
 // Browser canvas resolution
 // ============================================================
 
+/**
+ * Snapshot cache entry.
+ * @typedef {Object} SnapshotCacheEntry
+ * @property {string} url - The URL this snapshot is for
+ * @property {string} tabId - The browser tab ID
+ * @property {string} pageTitle - Page title at time of snapshot
+ * @property {string} snapshotText - The raw snapshot text
+ * @property {Array} snapshotItems - Parsed snapshot items
+ * @property {string} text - Page text content
+ * @property {string} screenshotSrc - Base64 screenshot data URI
+ * @property {number} timestamp - When this was captured (Date.now())
+ */
+
+/** @type {SnapshotCacheEntry|null} Recent snapshot cache to avoid redundant fetches */
+let recentSnapshotCache = null;
+const SNAPSHOT_CACHE_TTL_MS = 3000; // 3 seconds — reuse if no navigation occurred
+
+/**
+ * Resolve browser canvas content by navigating, snapshotting and capturing state.
+ *
+ * Reuses recent snapshot if URL hasn't changed and cache is still valid (3s TTL).
+ *
+ * @param {Object} content
+ * @param {{ navigate?: boolean }} [options]
+ * @returns {Promise<Object>}
+ */
 async function resolveBrowserCanvasContent(content = {}, options = {}) {
   const browserUrl = normalizeBrowserUrl(content.url || content.currentUrl || content.value || '');
   const browserTitle = String(content.title || '').trim() || buildBrowserTitleFromUrl(browserUrl);
+
+  // Check snapshot cache — reuse if URL unchanged and within TTL
+  const now = Date.now();
+  if (
+    recentSnapshotCache &&
+    recentSnapshotCache.url === browserUrl &&
+    (now - recentSnapshotCache.timestamp) < SNAPSHOT_CACHE_TTL_MS &&
+    options.navigate !== false
+  ) {
+    return {
+      ...content,
+      type: 'browser',
+      title: recentSnapshotCache.pageTitle || browserTitle,
+      url: browserUrl,
+      currentUrl: browserUrl,
+      pageTitle: recentSnapshotCache.pageTitle || browserTitle,
+      tabId: recentSnapshotCache.tabId || String(content.tabId || '').trim(),
+      tabs: Array.isArray(content.tabs) ? content.tabs : [],
+      text: recentSnapshotCache.text || String(content.text || ''),
+      snapshotText: recentSnapshotCache.snapshotText || String(content.snapshotText || ''),
+      snapshotItems: recentSnapshotCache.snapshotItems || Array.isArray(content.snapshotItems) ? content.snapshotItems : [],
+      screenshotSrc: recentSnapshotCache.screenshotSrc || String(content.screenshotSrc || ''),
+      status: 'ready',
+      message: '',
+      lastUpdatedAt: new Date().toISOString(),
+      cacheHit: true,
+    };
+  }
 
   try {
     let tabState = null;
@@ -863,7 +974,7 @@ async function resolveBrowserCanvasContent(content = {}, options = {}) {
       activeTabId ? pinchtabTabRequestJson(activeTabId, '/screenshot') : pinchtabRequestJson('/screenshot'),
     ]);
 
-    return {
+    const result = {
       ...content,
       type: 'browser',
       title: browserTitle || String(textData?.title || browserTitle).trim() || 'Browser',
@@ -879,7 +990,22 @@ async function resolveBrowserCanvasContent(content = {}, options = {}) {
       status: 'ready',
       message: '',
       lastUpdatedAt: new Date().toISOString(),
+      cacheHit: false,
     };
+
+    // Update snapshot cache
+    recentSnapshotCache = {
+      url: browserUrl,
+      tabId: String(activeTabId || '').trim(),
+      pageTitle: result.pageTitle,
+      snapshotText: result.snapshotText,
+      snapshotItems: result.snapshotItems,
+      text: result.text,
+      screenshotSrc: result.screenshotSrc,
+      timestamp: Date.now(),
+    };
+
+    return result;
   } catch (error) {
     return {
       ...content,
@@ -905,6 +1031,12 @@ async function resolveBrowserCanvasContent(content = {}, options = {}) {
 // Browser Autopilot
 // ============================================================
 
+/**
+ * Summarize a browser directive for logs/status output.
+ *
+ * @param {Object} directive
+ * @returns {string}
+ */
 function summarizeBrowserDirective(directive = {}) {
   const action = String(directive.action || directive.kind || 'refresh').trim().toLowerCase();
   if (!action) return 'refresh';
@@ -918,10 +1050,22 @@ function summarizeBrowserDirective(directive = {}) {
   return action;
 }
 
+/**
+ * Summarize the free-text reason attached to a browser autopilot response.
+ *
+ * @param {Object} response
+ * @returns {string}
+ */
 function summarizeBrowserReason(response = {}) {
   return normalizeLine(response.reasoning || response.speech || '', MAX_PROMPT_LINE_LENGTH);
 }
 
+/**
+ * Check whether an autopilot response should terminate the browser loop.
+ *
+ * @param {Object} response
+ * @returns {boolean}
+ */
 function isBrowserAutopilotTerminalResponse(response = {}) {
   const speech = normalizeLine(response?.speech || '', 500).toLowerCase();
   if (!speech) return false;
@@ -960,9 +1104,12 @@ module.exports = {
   runPinchtabAction,
   evaluatePinchtabExpression,
   findPinchtabRef,
+  killPinchtabListenerProcess,
+  focusPinchtabChromeWindow,
   performBrowserAction,
 
   // Canvas
+  createPinchtabHeaders,
   resolveBrowserCanvasContent,
 
   // Utilities
@@ -973,6 +1120,7 @@ module.exports = {
   trimBrowserText,
   getActiveBrowserSnapshotItem,
   getBrowserSnapshotItemByRef,
+  getBrowserTabId,
   extractSnapshotItemLabelText,
   extractSnapshotItemValue,
   isTextInputFallbackCandidate,

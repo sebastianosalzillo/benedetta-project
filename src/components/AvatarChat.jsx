@@ -63,12 +63,14 @@ function AvatarChat({
     <div className="chat-shell">
 
       {/* ── Toolbar ───────────────────────────────────────────── */}
-      <div className="chat-toolbar">
+      <div className="chat-toolbar" role="group" aria-label="Chat and window state controls">
         <button
           type="button"
           className={`toolbar-pill ${windowPrefs.avatarAlwaysOnTop ? 'toolbar-pill-active' : ''}`}
           onClick={() => onToggleAlwaysOnTop('avatar')}
           title="Toggle avatar always-on-top"
+          aria-pressed={windowPrefs.avatarAlwaysOnTop}
+          aria-label={windowPrefs.avatarAlwaysOnTop ? 'Disable avatar always-on-top' : 'Enable avatar always-on-top'}
         >
           Avatar {windowPrefs.avatarAlwaysOnTop ? '📌' : '·'}
         </button>
@@ -77,14 +79,16 @@ function AvatarChat({
           className={`toolbar-pill ${windowPrefs.chatAlwaysOnTop ? 'toolbar-pill-active' : ''}`}
           onClick={() => onToggleAlwaysOnTop('chat')}
           title="Toggle chat always-on-top"
+          aria-pressed={windowPrefs.chatAlwaysOnTop}
+          aria-label={windowPrefs.chatAlwaysOnTop ? 'Disable chat always-on-top' : 'Enable chat always-on-top'}
         >
           Chat {windowPrefs.chatAlwaysOnTop ? '📌' : '·'}
         </button>
-        <div className="toolbar-pill">
+        <div className="toolbar-pill" role="status" aria-live="polite" aria-label={`Stream status: ${streamBadge}`}>
           {streamBadge === 'streaming' ? '⚡' : streamBadge === 'error' ? '✗' : '·'} {streamBadge}
         </div>
         {ttsStatus && ttsStatus !== 'idle' && (
-          <div className="toolbar-pill">
+          <div className="toolbar-pill" role="status" aria-live="polite" aria-label={`TTS status: ${ttsStatus}${Number.isFinite(ttsLatencyMs) ? `, ${ttsLatencyMs} milliseconds` : ''}`}>
             🔊 {ttsStatus}{Number.isFinite(ttsLatencyMs) ? ` ${ttsLatencyMs}ms` : ''}
           </div>
         )}
@@ -92,18 +96,19 @@ function AvatarChat({
           type="button"
           className="toolbar-pill"
           onClick={onOpenSettings}
+          aria-label="Open brain settings"
         >
-          ⚙ Impostazioni
+          ⚙ Settings
         </button>
       </div>
 
       {/* ── Workspace bootstrap card ──────────────────────────── */}
       {showWorkspaceCard && (
-        <div className={`workspace-card ${workspace.bootstrapPending ? 'workspace-card-pending' : ''}`}>
+        <div className={`workspace-card ${workspace.bootstrapPending ? 'workspace-card-pending' : ''}`} role="region" aria-label="Workspace bootstrap status">
           <div className="workspace-header">
             <div>
               <div className="workspace-eyebrow">Workspace</div>
-              <div className="workspace-title">Bootstrap in corso</div>
+              <div className="workspace-title">Bootstrap in progress</div>
             </div>
             <div className="workspace-pills">
               <span className="workspace-pill">{workspace.bootstrapPending ? 'pending' : 'ready'}</span>
@@ -130,7 +135,7 @@ function AvatarChat({
 
           {workspace.bootstrapQuestion && (
             <div className="workspace-line">
-              <span className="workspace-label">Domanda</span>
+              <span className="workspace-label">Question</span>
               <span>{workspace.bootstrapQuestion}</span>
             </div>
           )}
@@ -147,7 +152,7 @@ function AvatarChat({
 
           <div className="workspace-actions">
             <button type="button" className="toolbar-pill" onClick={onOpenWorkspace}>
-              Apri workspace
+              Open workspace
             </button>
             <button
               type="button"
@@ -162,20 +167,27 @@ function AvatarChat({
       )}
 
       {/* ── TTS error ─────────────────────────────────────────── */}
-      {ttsLastError && (
-        <div className="message message-system">
+      {ttsStatus === 'error' && ttsLastError && (
+        <div className="message message-system" role="alert">
           <div className="message-role">tts error</div>
           <div className="message-text">{ttsLastError}</div>
         </div>
       )}
 
       {/* ── Chat log ──────────────────────────────────────────── */}
-      <div ref={listRef} className="chat-log">
+      <div
+        ref={listRef}
+        className="chat-log"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-label="Conversation with Assistant"
+      >
         {messages.length === 0 && (
           <div className="message message-system">
-            <div className="message-role">sistema</div>
+            <div className="message-role">system</div>
             <div className="message-text">
-              Nyx è un agente autonomo — usa browser, desktop o risponde direttamente in base alla tua richiesta. Scrivi per iniziare.
+              Assistant is an autonomous agent — it uses the browser, desktop, or replies directly based on your request. Type to start.
             </div>
           </div>
         )}
@@ -188,7 +200,7 @@ function AvatarChat({
             <div className="message-role">
               {message.role}
               {message.streaming ? ' · streaming' : ''}
-              {message.interrupted ? ' · interrotto' : ''}
+              {message.interrupted ? ' · interrupted' : ''}
             </div>
             <div className="message-text">{message.text || (message.streaming ? '…' : '')}</div>
             {message.meta && (
@@ -206,7 +218,7 @@ function AvatarChat({
 
         {/* Typing indicator — visibile quando brain elabora ma non c'è ancora streaming */}
         {isThinking && !messages.some((m) => m.streaming) && (
-          <div className="typing-indicator">
+          <div className="typing-indicator" role="status" aria-live="polite" aria-label="Assistant is thinking">
             <div className="typing-dot" />
             <div className="typing-dot" />
             <div className="typing-dot" />
@@ -221,22 +233,24 @@ function AvatarChat({
           value={input}
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Scrivi un messaggio… (Enter invia · Shift+Enter va a capo)"
+          placeholder="Type a message... (Enter to send · Shift+Enter for new line)"
           rows={3}
           disabled={isBusy}
+          aria-label="Message for Assistant"
         />
         <div className="chat-form-actions">
           {canStop && (
-            <button type="button" className="secondary-button" onClick={onStop}>
+            <button type="button" className="secondary-button" onClick={onStop} aria-label="Stop current reply">
               ✕ Stop
             </button>
           )}
-          <button
-            type="submit"
-            className="chat-send-btn"
-            disabled={isBusy || !input.trim()}
-          >
-            {isBusy ? 'In elaborazione…' : 'Invia →'}
+            <button
+              type="submit"
+              className="chat-send-btn"
+              disabled={isBusy || !input.trim()}
+              aria-label={isBusy ? 'Send disabled while Assistant is thinking' : 'Send message'}
+            >
+            {isBusy ? 'Processing...' : 'Send →'}
           </button>
         </div>
       </form>

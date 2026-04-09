@@ -3,35 +3,30 @@ import NyxAvatar from './components/NyxAvatar';
 import AvatarChat from './components/AvatarChat';
 import CanvasWorkspace from './components/CanvasWorkspace';
 import SettingsPanel from './components/SettingsPanel';
+import { applyChatStreamEvent, createSystemMessage } from './chat-stream-state.js';
 
 function getScreen() {
   const params = new URLSearchParams(window.location.search);
   return params.get('screen') || 'chat';
 }
 
-function createSystemMessage(text) {
-  return {
-    id: `system-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-    role: 'system',
-    text,
-  };
+function formatRelativeDreamTime(value) {
+  if (!value) return 'mai';
+  const deltaMs = Math.max(0, Date.now() - new Date(value).getTime());
+  const totalSeconds = Math.floor(deltaMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s fa`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m fa`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  return `${totalHours}h fa`;
 }
 
-function normalizeStreamMessage(message, fallbackText, overrides = {}) {
-  if (message && typeof message === 'object' && !Array.isArray(message)) {
-    return {
-      ...message,
-      ...overrides,
-      id: message.id || overrides.id || `stream-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
-      role: message.role || overrides.role || 'system',
-      text: typeof message.text === 'string' ? message.text : (fallbackText || ''),
-    };
-  }
-
-  return {
-    ...createSystemMessage(typeof message === 'string' ? message : fallbackText),
-    ...overrides,
-  };
+function formatCountdown(ms) {
+  const safeMs = Math.max(0, Number(ms) || 0);
+  const totalSeconds = Math.ceil(safeMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 const DEFAULT_APP_STATE = {
@@ -101,6 +96,13 @@ const DEFAULT_APP_STATE = {
     ocrStatus: 'idle',
     error: '',
   },
+  dream: {
+    isActive: false,
+    lastInteractionAt: null,
+    lastDreamAt: null,
+    dreamCount: 0,
+    idleTimeoutMs: 0,
+  },
   workspace: {
     path: '',
     dailyMemoryPath: '',
@@ -119,6 +121,22 @@ const DEFAULT_APP_STATE = {
   },
 };
 
+const STATUS_LABELS = {
+  thinking: 'Thinking',
+  'tts-loading': 'TTS loading',
+  speaking: 'Speaking',
+  error: 'Error',
+};
+
+const STREAM_LABELS = {
+  connected: 'Stream connected',
+  wait: 'Stream wait',
+  streaming: 'Stream live',
+  speaking: 'Stream speaking',
+  timeout: 'Stream timeout',
+  error: 'Stream error',
+};
+
 function App() {
   const [activePanel, setActivePanel] = useState('chat');
   const [brainTest, setBrainTest] = useState(null);
@@ -130,7 +148,8 @@ function App() {
     content: { type: 'empty', title: 'Canvas', value: '' },
   });
   const [appState, setAppState] = useState(DEFAULT_APP_STATE);
-  const screen = useMemo(() => getScreen(), []);
+  const [dreamNow, setDreamNow] = useState(Date.now());
+  const screen = useMemo(getScreen, []);
 
   useEffect(() => {
     let unsubscribeStatus;
@@ -171,82 +190,7 @@ function App() {
 
     if (window.electronAPI?.onChatStream && screen === 'chat') {
       unsubscribeStream = window.electronAPI.onChatStream((event) => {
-        setMessages((current) => {
-          if (event.type === 'tool_start') {
-            const toolText = `\u{1F527} Usando tool: ${event.tools.join(', ')} (turno ${event.turn})`;
-            return [...current, { id: `tool-${event.requestId}-${event.turn}`, requestId: event.requestId, role: 'system', text: toolText, ts: new Date().toISOString() }];
-          }
-          if (event.type === 'tool_complete') {
-            const toolText = `\u{2705} Tool completati: ${event.tools.join(', ')}`;
-            return [...current, { id: `tool-done-${event.requestId}-${event.turn}`, requestId: event.requestId, role: 'system', text: toolText, ts: new Date().toISOString() }];
-          }
-          if (event.type === 'tool_error') {
-            return [...current, { id: `tool-err-${event.requestId}-${event.turn}`, requestId: event.requestId, role: 'system', text: `\u{274C} Errore tool: ${event.errors}`, ts: new Date().toISOString() }];
-          }
-          if (event.type === 'message' || event.type === 'delta') {
-            const hasPlaceholder = current.some((message) => message.requestId === event.requestId && message.streaming);
-            if (!hasPlaceholder) {
-              return [
-                ...current,
-                {
-                  id: `stream-${event.requestId}`,
-                  requestId: event.requestId,
-                  role: 'assistant',
-                  text: event.text,
-                  streaming: true,
-                },
-              ];
-            }
-
-            return current.map((message) => {
-              if (message.requestId !== event.requestId || !message.streaming) return message;
-              return {
-                ...message,
-                text: `${message.text}${event.text}`,
-              };
-            });
-          }
-
-          if (event.type === 'complete' || event.type === 'completed') {
-            const hasPlaceholder = current.some((message) => message.requestId === event.requestId && message.streaming);
-            const nextMessage = normalizeStreamMessage(event.message, 'Response completed.', {
-              requestId: event.requestId,
-              role: 'assistant',
-              streaming: false,
-            });
-            if (!hasPlaceholder) {
-              return [...current, nextMessage];
-            }
-
-            return current.map((message) => {
-              if (message.requestId !== event.requestId || !message.streaming) return message;
-              return nextMessage;
-            });
-          }
-
-          if (event.type === 'stopped') {
-            const updated = current.map((message) => {
-              if (message.requestId !== event.requestId || !message.streaming) return message;
-              return {
-                ...message,
-                streaming: false,
-                interrupted: true,
-              };
-            });
-            return [...updated, normalizeStreamMessage(event.message, 'Request stopped.', { requestId: event.requestId })];
-          }
-
-          if (event.type === 'error') {
-            const withoutStreaming = current.filter((message) => !(message.requestId === event.requestId && message.streaming));
-            return [...withoutStreaming, normalizeStreamMessage(event.message, event.error || 'Request failed.', { requestId: event.requestId })];
-          }
-
-          if (event.type === 'system') {
-            return [...current, normalizeStreamMessage(event.message, 'System update.', { requestId: event.requestId })];
-          }
-
-          return current;
-        });
+        setMessages((current) => applyChatStreamEvent(current, event));
       });
     }
 
@@ -269,23 +213,39 @@ function App() {
     };
   }, [screen]);
 
+  useEffect(() => {
+    const timerId = window.setInterval(() => {
+      setDreamNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timerId);
+  }, []);
+
   const statusLabel = useMemo(() => {
-    if (appState.status === 'thinking') return 'Thinking';
-    if (appState.status === 'tts-loading') return 'TTS loading';
-    if (appState.status === 'speaking') return 'Speaking';
-    if (appState.status === 'error') return 'Error';
-    return 'Idle';
+    return STATUS_LABELS[appState.status] || 'Idle';
   }, [appState.status]);
 
   const streamLabel = useMemo(() => {
-    if (appState.streamStatus === 'connected') return 'Stream connected';
-    if (appState.streamStatus === 'wait') return 'Stream wait';
-    if (appState.streamStatus === 'streaming') return 'Stream live';
-    if (appState.streamStatus === 'speaking') return 'Stream speaking';
-    if (appState.streamStatus === 'timeout') return 'Stream timeout';
-    if (appState.streamStatus === 'error') return 'Stream error';
-    return 'Stream disconnected';
+    return STREAM_LABELS[appState.streamStatus] || 'Stream disconnected';
   }, [appState.streamStatus]);
+
+  const dreamLabel = useMemo(() => {
+    if (appState.dream?.isActive) return 'Dream attiva';
+    if (appState.dream?.lastDreamAt) return `Dream ${appState.dream.dreamCount || 0}`;
+    return 'Dream in attesa';
+  }, [appState.dream]);
+
+  const dreamCountdownLabel = useMemo(() => {
+    if (appState.dream?.isActive) return 'ora';
+    const idleTimeoutMs = Number(appState.dream?.idleTimeoutMs || 0);
+    if (!idleTimeoutMs) return '--:--';
+    const lastInteractionAt = appState.dream?.lastInteractionAt
+      ? new Date(appState.dream.lastInteractionAt).getTime()
+      : dreamNow;
+    const remainingMs = Math.max(0, (lastInteractionAt + idleTimeoutMs) - dreamNow);
+    return formatCountdown(remainingMs);
+  }, [appState.dream, dreamNow]);
+
+  const dreamLastRunLabel = useMemo(() => formatRelativeDreamTime(appState.dream?.lastDreamAt), [appState.dream?.lastDreamAt, dreamNow]);
 
   async function handleSend(text) {
     const result = await window.electronAPI.sendChatMessage(text);
@@ -438,8 +398,8 @@ function App() {
   if (screen === 'avatar') {
     return (
       <div className="avatar-screen">
-        <div className="avatar-drag-handle">
-          <div className="avatar-drag-pill">drag avatar</div>
+        <div className="avatar-drag-handle" title="Drag to move the window">
+          <div className="avatar-drag-pill">{statusLabel}</div>
         </div>
         <NyxAvatar />
       </div>
@@ -462,20 +422,30 @@ function App() {
     <div className="app-shell chat-screen">
       <div className="app-backdrop" />
 
-      <div className="hud-panel">
+      <div className="hud-panel" aria-label="Nyx chat workspace">
         <div className="hud-header">
           <div>
             <div className="eyebrow">Nyx · Avatar ACP Desktop</div>
             <h1>{appState.brain?.selectedLabel || 'Nyx'}</h1>
           </div>
-          <div className={`status-pill status-${appState.status}`}>{statusLabel}</div>
+          <div
+            className={`status-pill status-${appState.status}`}
+            role="status"
+            aria-live="polite"
+            aria-label={`Stato avatar: ${statusLabel}`}
+          >
+            {statusLabel}
+          </div>
         </div>
 
-        <div className="hud-meta">
-          <span>{appState.mode}</span>
-          <span>{streamLabel}</span>
-          <span>TTS {appState.ttsProvider || 'Kokoro'}</span>
-          {appState.ttsLatencyMs != null && <span>{appState.ttsLatencyMs}ms</span>}
+        <div className="hud-meta" aria-label="Stato sessione">
+          <span aria-label={`Modalità corrente ${appState.mode}`}>{appState.mode}</span>
+          <span aria-label={`Stato stream ${streamLabel}`}>{streamLabel}</span>
+          <span aria-label={dreamLabel}>{dreamLabel}</span>
+          <span aria-label={`Prossimo dream tra ${dreamCountdownLabel}`}>Next dream {dreamCountdownLabel}</span>
+          <span aria-label={`Ultimo dream ${dreamLastRunLabel}`}>Ultimo dream {dreamLastRunLabel}</span>
+          <span aria-label={`Provider text to speech ${appState.ttsProvider || 'Kokoro'}`}>TTS {appState.ttsProvider || 'Kokoro'}</span>
+          {appState.ttsLatencyMs != null && <span aria-label={`Latenza text to speech ${appState.ttsLatencyMs} millisecondi`}>{appState.ttsLatencyMs}ms</span>}
         </div>
 
         {activePanel === 'settings' ? (

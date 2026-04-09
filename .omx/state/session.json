@@ -1,0 +1,9 @@
+{
+  "session_id": "omx-1775214080030-jo81ua",
+  "started_at": "2026-04-03T11:01:20.254Z",
+  "cwd": "/mnt/c/Users/salzi/Desktop/Nuova cartella",
+  "pid": 111780,
+  "platform": "linux",
+  "pid_start_ticks": 511985,
+  "pid_cmdline": "node /mnt/c/Users/salzi/AppData/Roaming/npm/node_modules/oh-my-codex/dist/cli/omx.js --madmax --high"
+}

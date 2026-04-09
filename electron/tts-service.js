@@ -1,4 +1,4 @@
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const {
   KOKORO_SERVER_SCRIPT,
@@ -39,6 +39,7 @@ class TtsService {
     this._url = options.url || KOKORO_URL;
     this._speaker = options.speaker || KOKORO_DEFAULT_SPEAKER;
     this._python = options.python || KOKORO_PYTHON;
+    this._pythonLaunch = null;
     this._script = options.script || KOKORO_SERVER_SCRIPT;
     this._startupTimeout = options.startupTimeout || KOKORO_STARTUP_TIMEOUT_MS;
     this._onStatusChange = options.onStatusChange;
@@ -95,6 +96,13 @@ class TtsService {
     this._startupPromise = this._start();
     try {
       return await this._startupPromise;
+    } catch (error) {
+      const errorMessage = error?.message || String(error);
+      this._stop();
+      this._status = 'error';
+      this._lastError = errorMessage;
+      this._onStatusChange?.('error', errorMessage);
+      throw error;
     } finally {
       this._startupPromise = null;
     }
@@ -109,15 +117,13 @@ class TtsService {
       throw new Error(`Kokoro server script not found: ${this._script}`);
     }
 
-    if (!fs.existsSync(this._python)) {
-      throw new Error(`Kokoro Python not found: ${this._python}`);
-    }
+    this._pythonLaunch = resolvePythonLaunch(this._python);
 
     if (this._process) {
       this._stop();
     }
 
-    this._process = spawn(this._python, ['-u', this._script], {
+    this._process = spawn(this._pythonLaunch.command, [...this._pythonLaunch.args, '-u', this._script], {
       cwd: path.join(__dirname, '..'),
       windowsHide: true,
       env: {
@@ -125,7 +131,7 @@ class TtsService {
         KOKORO_HOST: this._host,
         KOKORO_PORT: String(this._port),
         KOKORO_DEFAULT_SPEAKER: this._speaker,
-        KOKORO_PYTHON: this._python,
+        KOKORO_PYTHON: this._pythonLaunch.displayValue,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -248,4 +254,74 @@ class TtsService {
 
 module.exports = {
   TtsService,
+  resolvePythonLaunch,
 };
+
+function parseLaunchSpec(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  if (fs.existsSync(raw)) {
+    return {
+      command: raw,
+      args: [],
+      displayValue: raw,
+    };
+  }
+
+  const parts = raw.match(/"[^"]+"|'[^']+'|\S+/g) || [];
+  if (!parts.length) return null;
+  const [command, ...args] = parts.map((part) => part.replace(/^["']|["']$/g, ''));
+  return {
+    command,
+    args,
+    displayValue: raw,
+  };
+}
+
+function canImportKokoro(candidate) {
+  try {
+    const result = spawnSync(candidate.command, [...candidate.args, '-c', 'import kokoro'], {
+      windowsHide: true,
+      encoding: 'utf8',
+    });
+    return !result.error && result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function resolvePythonLaunch(preferredValue = '') {
+  const candidates = [];
+  const seen = new Set();
+  const preferred = parseLaunchSpec(preferredValue);
+  if (preferred) {
+    candidates.push(preferred);
+    seen.add(preferred.displayValue);
+  }
+
+  const defaults = process.platform === 'win32'
+    ? [
+        { command: 'py', args: ['-3'], displayValue: 'py -3' },
+        { command: 'python', args: [], displayValue: 'python' },
+        { command: 'python3', args: [], displayValue: 'python3' },
+      ]
+    : [
+        { command: 'python3', args: [], displayValue: 'python3' },
+        { command: 'python', args: [], displayValue: 'python' },
+      ];
+
+  for (const candidate of defaults) {
+    if (seen.has(candidate.displayValue)) continue;
+    candidates.push(candidate);
+    seen.add(candidate.displayValue);
+  }
+
+  for (const candidate of candidates) {
+    if (canImportKokoro(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error('No usable Python launcher found for Kokoro TTS. Set KOKORO_PYTHON or install python3/py with kokoro.');
+}

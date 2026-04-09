@@ -74,9 +74,9 @@ function compactOldMessages(messages) {
   const assistantMessages = messages.filter((m) => m.role === 'assistant').map((m) => m.text);
 
   const summary = [
-    `[${messages.length} messaggi compattati]`,
-    userMessages.length ? `Utente ha chiesto: ${userMessages.slice(-2).join('; ')}` : '',
-    assistantMessages.length ? `Assistant ha risposto su: ${assistantMessages.slice(-2).join('; ')}` : '',
+    `[${messages.length} messages compacted]`,
+    userMessages.length ? `User asked: ${userMessages.slice(-2).join('; ')}` : '',
+    assistantMessages.length ? `Assistant replied about: ${assistantMessages.slice(-2).join('; ')}` : '',
   ].filter(Boolean).join('. ');
 
   return {

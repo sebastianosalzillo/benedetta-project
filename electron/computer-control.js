@@ -22,13 +22,8 @@ const {
   MAX_BOT_AUTO_ID_LABEL,
   MAX_BOT_CLASS_NAME_LABEL,
 } = require('./constants');
-
-/**
- * Normalize a line of text to a max length.
- */
-function normalizeLine(text, maxLength) {
-  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
-}
+const { normalizeLine } = require('./workspace-manager');
+const { listOllamaModels } = require('./ollama-client');
 
 /**
  * Normalize computer OCR text.
@@ -354,28 +349,7 @@ async function probeOllamaStatus(host, model) {
   const normalizedModel = String(model || '').trim() || DEFAULT_OLLAMA_MODEL;
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 6000);
-
-    const response = await fetch(`${normalizedHost}/api/tags`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      return {
-        checkedAt: new Date().toISOString(),
-        reachable: false,
-        modelAvailable: false,
-        availableModels: [],
-        error: normalizeLine(`Ollama responded with status ${response.status}`, MAX_STATUS_ERROR_LENGTH),
-      };
-    }
-
-    const payload = await response.json();
-    const models = Array.isArray(payload?.models)
-      ? payload.models.map((item) => String(item?.name || '').trim()).filter(Boolean)
-      : [];
+    const models = await listOllamaModels(normalizedHost);
 
     return {
       checkedAt: new Date().toISOString(),
@@ -614,7 +588,6 @@ async function readPywinautoActiveWindowDetails(title = '') {
 }
 
 module.exports = {
-  normalizeLine,
   normalizeComputerOcrText,
   buildPowerShellEncodedCommand,
   decodePowerShellCliXml,

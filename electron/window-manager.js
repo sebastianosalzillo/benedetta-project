@@ -1,5 +1,9 @@
 const path = require('path');
+const fs = require('fs');
 const { BrowserWindow, screen } = require('electron');
+const {
+  createNavigationGuard,
+} = require('./security');
 const {
   DEFAULT_CHAT_WIDTH,
   DEFAULT_CANVAS_WIDTH,
@@ -7,6 +11,10 @@ const {
   WINDOW_CANVAS_GAP,
   WINDOW_MIN_AVATAR_WIDTH,
   WINDOW_MIN_AVATAR_HEIGHT,
+  WINDOW_MIN_CHAT_WIDTH,
+  WINDOW_MIN_CHAT_HEIGHT,
+  WINDOW_MIN_CANVAS_WIDTH,
+  WINDOW_MIN_CANVAS_HEIGHT,
   WINDOW_CHAT_WIDTH_RATIO,
   WINDOW_CANVAS_WIDTH_RATIO,
   WINDOW_AVATAR_WIDTH_RATIO,
@@ -25,11 +33,25 @@ const { createRendererLoop, isRendererUnavailable } = require('./renderer-loop')
 /**
  * Read/write JSON file helpers.
  */
+/**
+ * Read a JSON file with fallback on parse/read failure.
+ *
+ * @param {string} filePath
+ * @param {any} fallback
+ * @returns {any}
+ */
 function readJsonFile(filePath, fallback) {
   const fs = require('fs');
   try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch { return fallback; }
 }
 
+/**
+ * Write a JSON-serializable value to disk.
+ *
+ * @param {string} filePath
+ * @param {any} value
+ * @returns {void}
+ */
 function writeJsonFile(filePath, value) {
   const fs = require('fs');
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -37,14 +59,20 @@ function writeJsonFile(filePath, value) {
 }
 
 /**
- * Get display by ID or fallback to primary.
+ * Get a display by ID or fall back to the primary display.
+ *
+ * @param {number|string} displayId
+ * @returns {Electron.Display}
  */
 function getDisplayById(displayId) {
   return screen.getAllDisplays().find((d) => d.id === displayId) || screen.getPrimaryDisplay();
 }
 
 /**
- * Check if bounds are visible on any display.
+ * Check whether bounds intersect any display work area.
+ *
+ * @param {{ x: number, y: number, width: number, height: number } | null} bounds
+ * @returns {boolean}
  */
 function isBoundsVisible(bounds) {
   if (!bounds) return false;
@@ -57,7 +85,10 @@ function isBoundsVisible(bounds) {
 }
 
 /**
- * Calculate window layout for a display.
+ * Calculate default avatar/chat/canvas layout for a display.
+ *
+ * @param {number|string} displayId
+ * @returns {{ avatar: Object, chat: Object, canvas: Object }}
  */
 function getWindowLayout(displayId) {
   const workArea = getDisplayById(displayId).workArea;
@@ -76,7 +107,12 @@ function getWindowLayout(displayId) {
 }
 
 /**
- * Get stored window config with fallback.
+ * Read stored window config and fall back to computed defaults when needed.
+ *
+ * @param {Object} app
+ * @param {'avatar'|'chat'|'canvas'} key
+ * @param {boolean} defaultAlwaysOnTop
+ * @returns {{ bounds: Object, displayId: number|string, alwaysOnTop: boolean }}
  */
 function getStoredWindowConfig(app, key, defaultAlwaysOnTop) {
   const statePath = getAppFilePath(app, 'window-state.json');
@@ -89,7 +125,10 @@ function getStoredWindowConfig(app, key, defaultAlwaysOnTop) {
 }
 
 /**
- * Serialize window state for persistence.
+ * Serialize a window for persistence.
+ *
+ * @param {BrowserWindow|null} targetWindow
+ * @returns {Object|undefined}
  */
 function serializeWindowState(targetWindow) {
   if (!targetWindow || targetWindow.isDestroyed()) return undefined;
@@ -99,7 +138,11 @@ function serializeWindowState(targetWindow) {
 }
 
 /**
- * Get app file path.
+ * Resolve an app-scoped state file path.
+ *
+ * @param {Object} app
+ * @param {string} name
+ * @returns {string}
  */
 function getAppFilePath(app, name) {
   return path.join(app.getPath('userData'), name);
@@ -110,14 +153,73 @@ function getAppFilePath(app, name) {
  */
 let persistWindowStateTimer = null;
 
+/**
+ * Window registry — centralizes window references.
+ * Set by main.js after each createXxxWindow call.
+ */
+let _avatarWindow = null;
+let _chatWindow = null;
+let _canvasWindow = null;
+
+/**
+ * Get the avatar window instance.
+ * @returns {BrowserWindow|null} The avatar window or null
+ */
+function getAvatarWindow() { return _avatarWindow; }
+/**
+ * Set the avatar window instance.
+ * @param {BrowserWindow|null} win - The window instance
+ */
+function setAvatarWindow(win) { _avatarWindow = win; }
+function getChatWindow() { return _chatWindow; }
+function setChatWindow(win) { _chatWindow = win; }
+function getCanvasWindow() { return _canvasWindow; }
+function setCanvasWindow(win) { _canvasWindow = win; }
+function getWindows() { return { avatar: _avatarWindow, chat: _chatWindow, canvas: _canvasWindow }; }
+
+/**
+ * Resolve explicit window refs, falling back to the live registry when omitted.
+ *
+ * @param {BrowserWindow|null|undefined} avatarWindow
+ * @param {BrowserWindow|null|undefined} chatWindow
+ * @param {BrowserWindow|null|undefined} canvasWindow
+ * @returns {{ avatarWindow: BrowserWindow|null, chatWindow: BrowserWindow|null, canvasWindow: BrowserWindow|null }}
+ */
+function resolveWindowRefs(avatarWindow, chatWindow, canvasWindow) {
+  return {
+    avatarWindow: avatarWindow === undefined ? getAvatarWindow() : avatarWindow,
+    chatWindow: chatWindow === undefined ? getChatWindow() : chatWindow,
+    canvasWindow: canvasWindow === undefined ? getCanvasWindow() : canvasWindow,
+  };
+}
+
+/**
+ * Persist current window state to disk.
+ *
+ * @param {Object} app
+ * @param {BrowserWindow|null} [avatarWindow]
+ * @param {BrowserWindow|null} [chatWindow]
+ * @param {BrowserWindow|null} [canvasWindow]
+ * @returns {void}
+ */
 function persistWindowStateNow(app, avatarWindow, chatWindow, canvasWindow) {
+  const refs = resolveWindowRefs(avatarWindow, chatWindow, canvasWindow);
   writeJsonFile(getAppFilePath(app, 'window-state.json'), {
-    avatar: serializeWindowState(avatarWindow),
-    chat: serializeWindowState(chatWindow),
-    canvas: serializeWindowState(canvasWindow),
+    avatar: serializeWindowState(refs.avatarWindow),
+    chat: serializeWindowState(refs.chatWindow),
+    canvas: serializeWindowState(refs.canvasWindow),
   });
 }
 
+/**
+ * Debounce persistence of window state.
+ *
+ * @param {Object} app
+ * @param {BrowserWindow|null} [avatarWindow]
+ * @param {BrowserWindow|null} [chatWindow]
+ * @param {BrowserWindow|null} [canvasWindow]
+ * @returns {void}
+ */
 function schedulePersistWindowState(app, avatarWindow, chatWindow, canvasWindow) {
   if (persistWindowStateTimer) clearTimeout(persistWindowStateTimer);
   persistWindowStateTimer = setTimeout(() => {
@@ -127,15 +229,24 @@ function schedulePersistWindowState(app, avatarWindow, chatWindow, canvasWindow)
 }
 
 /**
- * Bind persistent bounds events to a window.
+ * Bind move/resize listeners that persist window state.
+ *
+ * @param {Object} app
+ * @param {BrowserWindow} targetWindow
+ * @returns {void}
  */
-function bindPersistentBounds(app, targetWindow, avatarWindow, chatWindow, canvasWindow) {
-  targetWindow.on('move', () => schedulePersistWindowState(app, avatarWindow, chatWindow, canvasWindow));
-  targetWindow.on('resize', () => schedulePersistWindowState(app, avatarWindow, chatWindow, canvasWindow));
+function bindPersistentBounds(app, targetWindow) {
+  targetWindow.on('move', () => schedulePersistWindowState(app));
+  targetWindow.on('resize', () => schedulePersistWindowState(app));
 }
 
 /**
- * Apply always-on-top to a window.
+ * Apply the project-specific always-on-top policy to a window.
+ *
+ * @param {BrowserWindow|null} targetWindow
+ * @param {'avatar'|'chat'|'canvas'} target
+ * @param {boolean} enabled
+ * @returns {void}
  */
 function applyAlwaysOnTop(targetWindow, target, enabled) {
   if (!targetWindow || targetWindow.isDestroyed()) return;
@@ -148,7 +259,10 @@ function applyAlwaysOnTop(targetWindow, target, enabled) {
 }
 
 /**
- * Normalize canvas layout alias.
+ * Normalize supported canvas layout aliases.
+ *
+ * @param {string} layout
+ * @returns {string}
  */
 function normalizeCanvasLayout(layout) {
   const value = String(layout || '').trim().toLowerCase();
@@ -157,7 +271,11 @@ function normalizeCanvasLayout(layout) {
 }
 
 /**
- * Get canvas bounds for a given layout.
+ * Compute next avatar/canvas bounds for a layout.
+ *
+ * @param {string} layout
+ * @param {{ x: number, y: number, width: number, height: number }} avatarBounds
+ * @returns {{ avatar: Object, canvas: Object }}
  */
 function getCanvasBoundsForLayout(layout, avatarBounds) {
   const avatar = avatarBounds;
@@ -184,20 +302,56 @@ function getCanvasBoundsForLayout(layout, avatarBounds) {
 }
 
 /**
- * Load renderer window with dev/prod URL.
+ * Load a renderer window in dev or production mode.
+ *
+ * @param {BrowserWindow} targetWindow
+ * @param {string} screenName
+ * @returns {void}
  */
 function loadRendererWindow(targetWindow, screenName) {
   const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
   const loadPromise = isDev
     ? targetWindow.loadURL(`${process.env.VITE_DEV_SERVER_URL}?screen=${encodeURIComponent(screenName)}`)
-    : targetWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'), { query: { screen: screenName } });
+    : targetWindow.loadURL(`app://app/index.html?screen=${encodeURIComponent(screenName)}`);
   void Promise.resolve(loadPromise).catch((error) => {
     console.error(`[loadRendererWindow:${screenName}]`, error);
   });
 }
 
 /**
+ * Load the avatar renderer window — talkinghead directly, no React/webview.
+ *
+ * @param {BrowserWindow} targetWindow
+ * @returns {void}
+ */
+function loadAvatarRenderer(targetWindow, retryCount = 0) {
+  if (!targetWindow || targetWindow.isDestroyed()) return;
+  const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+  const url = isDev
+    ? `${process.env.VITE_DEV_SERVER_URL.replace(/\/?$/, '/')}talkinghead/index.html`
+    : `app://app/talkinghead/index.html`;
+
+  targetWindow.loadURL(url).catch((error) => {
+    console.error(`[loadAvatarRenderer] attempt ${retryCount + 1}:`, error.code || error.message);
+    if (retryCount < 3 && !targetWindow.isDestroyed()) {
+      setTimeout(() => loadAvatarRenderer(targetWindow, retryCount + 1), 2000);
+    }
+  });
+}
+
+/**
  * Create the avatar window.
+ *
+ * The avatar runtime (talkinghead) loads directly in this BrowserWindow.
+ * No <webview> tag is used — the bridge script is preloaded and sets up
+ * IPC listeners for avatar commands.
+ *
+ * @param {Object} app - Electron app instance
+ * @param {Object} options - Creation options
+ * @param {Function} options.onStatusBroadcast - Callback for status broadcast
+ * @param {Function} options.onCanvasSync - Callback for canvas sync
+ * @param {Function} [options.getStatePayload] - Lazy getter for renderer status payload
+ * @returns {Object} - { window, statusLoop }
  */
 function createAvatarWindow(app, options = {}) {
   const config = getStoredWindowConfig(app, 'avatar', true);
@@ -207,18 +361,86 @@ function createAvatarWindow(app, options = {}) {
     x: config.bounds.x, y: config.bounds.y, width: config.bounds.width, height: config.bounds.height,
     minWidth: WINDOW_MIN_AVATAR_WIDTH, minHeight: WINDOW_MIN_AVATAR_HEIGHT,
     show: false, frame: false, transparent: true, hasShadow: false, title: 'Avatar ACP',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, nodeIntegration: false, webviewTag: true },
+    backgroundColor: '#00000000',
+    webPreferences: { preload: path.join(__dirname, 'avatar-window-bridge.js'), contextIsolation: true, sandbox: false, nodeIntegration: false, webviewTag: false },
   });
+
+  // Ensure webContents background is transparent so the window stays transparent.
+  avatarWindow.setBackgroundColor('#00000000');
 
   applyAlwaysOnTop(avatarWindow, 'avatar', config.alwaysOnTop);
   avatarWindow.setFullScreenable(false);
   avatarWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  avatarWindow.webContents.on('will-attach-webview', (_event, webPreferences, params) => {
-    delete webPreferences.preload;
-    webPreferences.nodeIntegration = false;
-    webPreferences.contextIsolation = true;
-    webPreferences.sandbox = true;
-    params.allowpopups = 'false';
+  avatarWindow.webContents.on('will-navigate', createNavigationGuard());
+
+  // On every load: force transparency + hide chrome + ensure avatar is visible.
+  // insertCSS bypasses CSP and contextIsolation completely.
+  // executeJavaScript runs in the page world and can access window.head directly.
+  const pageHandlerCode = (() => {
+    try {
+      return fs.readFileSync(path.join(__dirname, 'avatar-page-handler.js'), 'utf8');
+    } catch (e) {
+      console.error('[window-manager] failed to read avatar-page-handler.js', e);
+      return '';
+    }
+  })();
+
+  avatarWindow.webContents.on('did-finish-load', () => {
+    avatarWindow.webContents.insertCSS([
+      ':root, html, body, #main, #left, #view, #avatar, canvas {',
+      '  background: transparent !important;',
+      '  background-color: transparent !important;',
+      '}',
+      ':root, .theme-dark { --colorBackground: transparent !important; }',
+      '#controls, .controls, nav, header, footer, .sidebar, .panel,',
+      '.toolbar, .menu, .modal, .popup, .overlay, .card, .toast,',
+      '#ui-toggle, #right, #bottom { display: none !important; }',
+      '#loading { visibility: hidden !important; }',
+      '#main, #left {',
+      '  position: fixed !important; top: 0 !important; left: 0 !important;',
+      '  width: 100% !important; height: 100% !important; margin: 0 !important;',
+      '}',
+      // Guarantee avatar is visible even if talkinghead's JS never calls reconnectEffect
+      '#avatar, #view { opacity: 1 !important; }',
+    ].join('\n')).catch(() => {});
+
+    // Inject the page-side command handler into the page's JS world.
+    // This must run early so it's ready to receive commands.
+    if (pageHandlerCode && !avatarWindow.isDestroyed()) {
+      avatarWindow.webContents.executeJavaScript(pageHandlerCode).catch(() => {});
+    }
+
+    // After talkinghead has had time to create window.head and load the avatar,
+    // force the avatar visible and apply camera layout.
+    setTimeout(() => {
+      if (avatarWindow.isDestroyed()) return;
+      avatarWindow.webContents.executeJavaScript(`
+        (function() {
+          var av = document.getElementById('avatar');
+          var vw = document.getElementById('view');
+          if (av) av.style.opacity = '1';
+          if (vw) vw.style.opacity = '1';
+          var h = window.head;
+          if (!h) return;
+          try {
+            if (!h.armature && window.site && window.site.avatars) {
+              var first = Object.values(window.site.avatars)[0];
+              h.showAvatar(first).catch(function(){});
+            }
+          } catch(e) {}
+          try {
+            if (h.camera && h.controls && h.armature && h.armature.scale) {
+              h.armature.scale.setScalar(0.8);
+              var dist = 13.6, height = 0.92;
+              h.camera.position.set(0, height, dist);
+              if (h.controls.target && h.controls.target.set) h.controls.target.set(0, height, 0);
+              if (h.controls.update) h.controls.update();
+              h.controls.enabled = false;
+            }
+          } catch(e) {}
+        })();
+      `).catch(() => {});
+    }, 4000);
   });
 
   avatarWindow.once('ready-to-show', () => { avatarWindow.show(); onStatusBroadcast?.(); });
@@ -232,31 +454,38 @@ function createAvatarWindow(app, options = {}) {
     },
   });
 
-  bindPersistentBounds(app, avatarWindow, avatarWindow, options.chatWindow, options.canvasWindow);
+  bindPersistentBounds(app, avatarWindow);
   avatarWindow.on('move', () => onCanvasSync?.());
   avatarWindow.on('resize', () => onCanvasSync?.());
   avatarWindow.on('closed', () => { statusLoop?.stop(); });
 
-  loadRendererWindow(avatarWindow, 'avatar');
+  loadAvatarRenderer(avatarWindow);
   return { window: avatarWindow, statusLoop };
 }
 
 /**
  * Create the chat window.
+ *
+ * @param {Object} app
+ * @param {Object} [options]
+ * @param {Function} [options.onStatusBroadcast]
+ * @param {Function} [options.getStatePayload]
+ * @returns {{ window: BrowserWindow, statusLoop: Object }}
  */
 function createChatWindow(app, options = {}) {
   const config = getStoredWindowConfig(app, 'chat', true);
 
   const chatWindow = new BrowserWindow({
     x: config.bounds.x, y: config.bounds.y, width: config.bounds.width, height: config.bounds.height,
-    minWidth: 380, minHeight: 640, show: false, frame: true, transparent: false, hasShadow: true,
+    minWidth: WINDOW_MIN_CHAT_WIDTH, minHeight: WINDOW_MIN_CHAT_HEIGHT, show: false, frame: true, transparent: false, hasShadow: true,
     title: 'Avatar ACP Chat', backgroundColor: '#0c111c',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, nodeIntegration: false, webviewTag: false },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false },
   });
 
   applyAlwaysOnTop(chatWindow, 'chat', config.alwaysOnTop);
   chatWindow.setFullScreenable(false);
   chatWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  chatWindow.webContents.on('will-navigate', createNavigationGuard());
   chatWindow.once('ready-to-show', () => { chatWindow.show(); options.onStatusBroadcast?.(); });
 
   const statusLoop = createRendererLoop({
@@ -268,7 +497,7 @@ function createChatWindow(app, options = {}) {
     },
   });
 
-  bindPersistentBounds(app, chatWindow, options.avatarWindow, chatWindow, options.canvasWindow);
+  bindPersistentBounds(app, chatWindow);
   chatWindow.on('closed', () => { statusLoop?.stop(); });
 
   loadRendererWindow(chatWindow, 'chat');
@@ -277,20 +506,29 @@ function createChatWindow(app, options = {}) {
 
 /**
  * Create the canvas window.
+ *
+ * @param {Object} app
+ * @param {Object} [options]
+ * @param {Object} [options.canvasState]
+ * @param {BrowserWindow|null} [options.avatarWindow]
+ * @param {Function} [options.onStatusBroadcast]
+ * @param {Function} [options.getStatePayload]
+ * @returns {{ window: BrowserWindow, statusLoop: Object }}
  */
 function createCanvasWindow(app, options = {}) {
   const config = getStoredWindowConfig(app, 'canvas', false);
 
   const canvasWindow = new BrowserWindow({
     x: config.bounds.x, y: config.bounds.y, width: config.bounds.width, height: config.bounds.height,
-    minWidth: 380, minHeight: 480, show: false, frame: true, transparent: false, hasShadow: true,
+    minWidth: WINDOW_MIN_CANVAS_WIDTH, minHeight: WINDOW_MIN_CANVAS_HEIGHT, show: false, frame: true, transparent: false, hasShadow: true,
     title: 'Nyx Canvas', backgroundColor: '#0b1118',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: false, nodeIntegration: false, webviewTag: false },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false },
   });
 
   applyAlwaysOnTop(canvasWindow, 'canvas', config.alwaysOnTop);
   canvasWindow.setFullScreenable(false);
   canvasWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  canvasWindow.webContents.on('will-navigate', createNavigationGuard());
   canvasWindow.once('ready-to-show', () => {
     if (options.canvasState?.isOpen) canvasWindow.show();
     if (canvasWindow && !isRendererUnavailable(canvasWindow)) {
@@ -309,7 +547,7 @@ function createCanvasWindow(app, options = {}) {
     },
   });
 
-  bindPersistentBounds(app, canvasWindow, options.avatarWindow, options.chatWindow, canvasWindow);
+  bindPersistentBounds(app, canvasWindow);
   canvasWindow.on('closed', () => {
     if (options.canvasState?.layout === 'split-50' && options.canvasState?.lastAvatarBoundsBeforeSplit && options.avatarWindow && !options.avatarWindow.isDestroyed()) {
       options.avatarWindow.setBounds(options.canvasState.lastAvatarBoundsBeforeSplit);
@@ -326,7 +564,12 @@ function createCanvasWindow(app, options = {}) {
 }
 
 /**
- * Sync canvas window position to avatar window.
+ * Sync canvas bounds to the avatar window according to current layout.
+ *
+ * @param {BrowserWindow|null} canvasWindow
+ * @param {BrowserWindow|null} avatarWindow
+ * @param {{ isOpen: boolean, layout: string, lastAvatarBoundsBeforeSplit?: Object|null }} canvasState
+ * @returns {void}
  */
 function syncCanvasToAvatar(canvasWindow, avatarWindow, canvasState) {
   if (!canvasWindow || canvasWindow.isDestroyed()) return;
@@ -346,7 +589,14 @@ function syncCanvasToAvatar(canvasWindow, avatarWindow, canvasState) {
 }
 
 /**
- * Open canvas window.
+ * Open or reveal the canvas window.
+ *
+ * @param {Object} app
+ * @param {BrowserWindow|null} canvasWindow
+ * @param {BrowserWindow|null} avatarWindow
+ * @param {Object} canvasState
+ * @param {Object} [options]
+ * @returns {Promise<Object>}
  */
 async function openCanvas(app, canvasWindow, avatarWindow, canvasState, options = {}) {
   if (!ENABLE_LIVE_CANVAS) {
@@ -388,7 +638,12 @@ async function openCanvas(app, canvasWindow, avatarWindow, canvasState, options 
 }
 
 /**
- * Close canvas window.
+ * Close or hide the canvas window and restore avatar bounds if needed.
+ *
+ * @param {BrowserWindow|null} canvasWindow
+ * @param {BrowserWindow|null} avatarWindow
+ * @param {Object} canvasState
+ * @returns {Object}
  */
 function closeCanvas(canvasWindow, avatarWindow, canvasState) {
   if (canvasState.layout === 'split-50' && canvasState.lastAvatarBoundsBeforeSplit && avatarWindow && !avatarWindow.isDestroyed()) {
@@ -401,7 +656,15 @@ function closeCanvas(canvasWindow, avatarWindow, canvasState) {
 }
 
 /**
- * Set window always-on-top.
+ * Set always-on-top for one of the managed windows.
+ *
+ * @param {'avatar'|'chat'|'canvas'} target
+ * @param {boolean} enabled
+ * @param {BrowserWindow|null} avatarWindow
+ * @param {BrowserWindow|null} chatWindow
+ * @param {BrowserWindow|null} canvasWindow
+ * @param {Function} [onBroadcast]
+ * @returns {{ ok: boolean }}
  */
 function setWindowAlwaysOnTop(target, enabled, avatarWindow, chatWindow, canvasWindow, onBroadcast) {
   if (target === 'avatar') applyAlwaysOnTop(avatarWindow, target, enabled);
@@ -412,7 +675,12 @@ function setWindowAlwaysOnTop(target, enabled, avatarWindow, chatWindow, canvasW
 }
 
 /**
- * Get current window prefs.
+ * Get current window preferences (always on top settings).
+ * @param {BrowserWindow|null} avatarWindow - Avatar window
+ * @param {BrowserWindow|null} chatWindow - Chat window
+ * @param {BrowserWindow|null} canvasWindow - Canvas window
+ * @param {Object} storedState - Stored state object
+ * @returns {Object} Window preferences
  */
 function getCurrentWindowPrefs(avatarWindow, chatWindow, canvasWindow, storedState) {
   const state = storedState || {};
@@ -436,6 +704,7 @@ module.exports = {
   normalizeCanvasLayout,
   getCanvasBoundsForLayout,
   loadRendererWindow,
+  loadAvatarRenderer,
   createAvatarWindow,
   createChatWindow,
   createCanvasWindow,
@@ -444,4 +713,11 @@ module.exports = {
   closeCanvas,
   setWindowAlwaysOnTop,
   getCurrentWindowPrefs,
+  getAvatarWindow,
+  setAvatarWindow,
+  getChatWindow,
+  setChatWindow,
+  getCanvasWindow,
+  setCanvasWindow,
+  getWindows,
 };

@@ -3,13 +3,10 @@
    UI Specialist: Antigravity — 2026-04-02
    ============================================================ */
 
-/* --- Google Fonts ------------------------------------------ */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-
 /* --- Design Tokens ----------------------------------------- */
 :root {
   /* Typography */
-  --font-ui: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-ui: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'Cascadia Code', 'Consolas', monospace;
 
   /* Base palette */
@@ -1537,3 +1534,34 @@ input, textarea {
   to { opacity: 1; transform: translateX(0); }
 }
 .ui-divider { height: 1px; background: var(--clr-border-subtle); margin: 4px 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .message,
+  .typing-indicator,
+  .typing-dot,
+  .message-streaming-active::after,
+  .status-thinking,
+  .status-speaking,
+  .settings-enter,
+  .chat-enter {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .toolbar-pill:hover:not(:disabled),
+  .toolbar-pill:active:not(:disabled),
+  .chat-send-btn:hover:not(:disabled),
+  .chat-send-btn:active:not(:disabled) {
+    transform: none !important;
+    box-shadow: none !important;
+  }
+}

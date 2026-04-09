@@ -39,15 +39,20 @@ function normalizeLine(text, maxLength) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
+function truncateWithMarker(text, maxChars, marker = '\n\n[TRUNCATED]') {
+  const normalized = String(text || '').trim();
+  if (!normalized || !Number.isFinite(maxChars) || maxChars <= 0) return '';
+  if (normalized.length <= maxChars) return normalized;
+  const safeMarker = String(marker || '');
+  const cutoff = Math.max(0, maxChars - safeMarker.length);
+  return `${normalized.slice(0, cutoff).trim()}${safeMarker}`;
+}
+
 /**
  * Truncate text with truncation marker.
  */
 function truncatePromptText(text, maxChars) {
-  const normalized = String(text || '').trim();
-  if (!normalized || !Number.isFinite(maxChars) || maxChars <= 0) return '';
-  if (normalized.length <= maxChars) return normalized;
-  const cutoff = Math.max(0, maxChars - 16);
-  return `${normalized.slice(0, cutoff).trim()}\n\n[TRUNCATED]`;
+  return truncateWithMarker(text, maxChars);
 }
 
 /**
@@ -56,6 +61,7 @@ function truncatePromptText(text, maxChars) {
 function normalizeSpeechText(text) {
   return String(text || '')
     .replace(/\r/g, '')
+    .replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}\u{200D}\u{20E3}\u{231A}-\u{231B}\u{23E9}-\u{23F3}\u{23F8}-\u{23FA}\u{25AA}-\u{25AB}\u{25B6}\u{25C0}\u{25FB}-\u{25FE}]/gu, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
@@ -91,8 +97,7 @@ function writeTextFile(filePath, value, maxChars = null) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   let text = String(value || '');
   if (maxChars && text.length > maxChars) {
-    const cutoff = Math.max(0, maxChars - 16);
-    text = `${text.slice(0, cutoff).trim()}\n\n[TRUNCATED]`;
+    text = truncateWithMarker(text, maxChars);
   }
   fs.writeFileSync(filePath, text, 'utf8');
 }
@@ -115,6 +120,15 @@ function getWorkspaceDailyMemoryPath(app) {
 
 function getWorkspaceFilePath(app, name) {
   return path.join(getWorkspacePath(app), name);
+}
+
+function resolveWorkspacePath(app, requestPath = '') {
+  const trimmed = String(requestPath || '').trim().replace(/^[/\\]+/, '');
+  if (!trimmed) return null;
+  const workspaceRoot = path.resolve(getWorkspacePath(app));
+  const resolved = path.resolve(workspaceRoot, trimmed);
+  if (!resolved.startsWith(workspaceRoot)) return null;
+  return { resolved, workspaceRoot };
 }
 
 function getSessionsDirPath(app) {
@@ -198,43 +212,43 @@ function hasMeaningfulMarkdownContent(text = '') {
 }
 
 function buildDefaultWorkspaceFiles() {
-  const username = String(process.env.USERNAME || 'utente').trim() || 'utente';
+  const username = String(process.env.USERNAME || 'user').trim() || 'user';
   return {
     'AGENTS.md': [
-      '# AGENTS', '', '- Questo workspace descrive il comportamento stabile di Nyx.',
-      '- Rispondi in italiano, in modo diretto e sobrio.',
-      ENABLE_LIVE_CANVAS ? '- Usa CANVAS e BROWSER solo quando aggiungono valore reale.' : '- Usa BROWSER o COMPUTER solo quando aggiungono valore reale.',
-      '- Se emerge una preferenza durevole, proponi di salvarla nei file del workspace invece di affidarti solo alla chat.',
+      '# AGENTS', '', '- This workspace describes the stable behavior of the assistant.',
+      '- Respond in English, directly and concisely.',
+      ENABLE_LIVE_CANVAS ? '- Use CANVAS and BROWSER only when they add real value.' : '- Use BROWSER or COMPUTER only when they add real value.',
+      '- If a durable preference emerges, suggest saving it to workspace files rather than relying on chat history.',
     ].join('\n'),
     'SOUL.md': [
-      '# SOUL', '', 'Nyx e un avatar desktop pragmatico, lucido e concreto.',
-      'Evita entusiasmo artificiale, filler e rassicurazioni inutili.',
-      'Quando qualcosa e ambiguo, chiariscilo con precisione.',
+      '# SOUL', '', 'The assistant is a pragmatic, clear-headed, and concrete desktop avatar.',
+      'Avoid artificial enthusiasm, filler words, and unnecessary reassurances.',
+      'When something is ambiguous, clarify it with precision.',
     ].join('\n'),
     'TOOLS.md': [
-      '# TOOLS', '', '- ACP diretto tramite Qwen CLI con resume di sessione.',
-      '- Browser reale tramite PinchTab.',
-      ...(ENABLE_LIVE_CANVAS ? ['- Canvas laterale per testo, clipboard, file, immagini, video e audio.'] : ['- Computer use reale per finestre, controlli e input desktop.']),
-      '- TTS locale per playback e lipsync.',
+      '# TOOLS', '', '- Direct ACP via Qwen CLI with session resume.',
+      '- Real browser via PinchTab.',
+      ...(ENABLE_LIVE_CANVAS ? ['- Side canvas for text, clipboard, files, images, video, and audio.'] : ['- Real computer use for windows, controls, and desktop input.']),
+      '- Local TTS for playback and lipsync.',
     ].join('\n'),
     'IDENTITY.md': [
-      '# IDENTITY', '', '- Nome: Nyx',
-      ENABLE_LIVE_CANVAS ? '- Tipo: avatar desktop con chat, canvas e browser operativo' : '- Tipo: avatar desktop con chat, browser e computer use operativo',
-      '- Modalita base: assistente tecnico e operativo',
+      '# IDENTITY', '', '- Name: Assistant',
+      ENABLE_LIVE_CANVAS ? '- Type: desktop avatar with chat, canvas, and browser' : '- Type: desktop avatar with chat, browser, and computer use',
+      '- Default mode: technical and operational assistant',
     ].join('\n'),
     'USER.md': [
-      '# USER', '', `- Utente locale principale: ${username}`,
-      '- Ambiente principale: Windows desktop',
-      '- Aggiorna questo file con preferenze stabili, tono, naming e flussi preferiti.',
+      '# USER', '', `- Primary local user: ${username}`,
+      '- Main environment: Windows desktop',
+      '- Update this file with stable preferences, tone, naming, and preferred workflows.',
     ].join('\n'),
-    'HEARTBEAT.md': ['# HEARTBEAT', '', '<!-- Aggiungi qui checklist periodiche da tenere a mente. -->'].join('\n'),
-    'BOOT.md': ['# BOOT', '', '<!-- Aggiungi qui una checklist da applicare al primo prompt dopo l avvio dell app. -->'].join('\n'),
+    'HEARTBEAT.md': ['# HEARTBEAT', '', '<!-- Add periodic checklists to keep in mind here. -->'].join('\n'),
+    'BOOT.md': ['# BOOT', '', '<!-- Add a checklist to apply on the first prompt after app startup. -->'].join('\n'),
     'BOOTSTRAP.md': [
-      '# BOOTSTRAP', '', 'Primo avvio del workspace Nyx.', '',
-      '1. Rivedi AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md e USER.md.',
-      '2. Sostituisci i placeholder con istruzioni e preferenze reali.',
-      '3. Se serve, crea MEMORY.md e i file in memory/YYYY-MM-DD.md.',
-      '4. Quando il bootstrap e completo, esegui /bootstrap done oppure usa il pulsante dedicato nella chat.',
+      '# BOOTSTRAP', '', 'First workspace startup.', '',
+      '1. Review AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, and USER.md.',
+      '2. Replace placeholders with real instructions and preferences.',
+      '3. If needed, create MEMORY.md and files in memory/YYYY-MM-DD.md.',
+      '4. When bootstrap is complete, run /bootstrap done or use the dedicated button in the chat.',
     ].join('\n'),
   };
 }
@@ -357,12 +371,12 @@ function buildWorkspaceUpdateBlock(directive = {}) {
 function applyWorkspaceUpdate(app, directive = {}) {
   const fileName = String(directive.file || '').trim();
   if (!WORKSPACE_MUTABLE_FILES.includes(fileName)) {
-    return { ok: false, error: 'Workspace update non consentito per questo file.' };
+    return { ok: false, error: 'Workspace update not allowed for this file.' };
   }
 
   const filePath = getWorkspaceFilePath(app, fileName);
   const content = normalizeSpeechText(String(directive.content || ''));
-  if (!content) return { ok: false, error: 'Workspace update senza contenuto.' };
+  if (!content) return { ok: false, error: 'Workspace update has no content.' };
 
   const current = readTextFile(filePath, '');
   if (current.includes(content)) return { ok: true, skipped: true, file: fileName, path: filePath };
@@ -383,7 +397,7 @@ function applyWorkspaceUpdate(app, directive = {}) {
 }
 
 function buildWorkspaceSavedMessage(result = {}) {
-  const label = result.skipped ? 'Workspace gia aggiornato' : 'Saved to workspace';
+  const label = result.skipped ? 'Workspace already up to date' : 'Saved to workspace';
   const file = String(result.file || '').trim();
   return {
     id: `system-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
@@ -549,7 +563,7 @@ function appendHistoryMessage(app, chatHistory, message) {
 }
 
 function compactCurrentSessionHistory(app, chatHistory, chatSession, persistChatSessionFn) {
-  if (chatHistory.length <= 8) return { ok: false, error: 'Sessione troppo corta per compattare.' };
+  if (chatHistory.length <= 8) return { ok: false, error: 'Session too short to compact.' };
 
   const preservedHead = chatHistory.slice(0, 1);
   const preservedTail = chatHistory.slice(-MAX_COMPACT_PRESERVE_TAIL);
@@ -557,7 +571,7 @@ function compactCurrentSessionHistory(app, chatHistory, chatSession, persistChat
   const summaryMessage = {
     id: createMessageId('system'),
     role: 'system',
-    text: `Compaction summary: ${buildConversationSummary(middle) || 'Nessun contenuto rilevante.'}`,
+    text: `Compaction summary: ${buildConversationSummary(middle) || 'No relevant content.'}`,
     ts: new Date().toISOString(),
     compacted: true,
   };
@@ -597,7 +611,7 @@ function buildSessionMarkdownRecord(record = {}) {
     '# SESSION', '', `- id: ${record.id || 'unknown'}`, `- created_at: ${record.createdAt || '-'}`,
     `- last_used_at: ${record.lastUsedAt || '-'}`, `- acp_session_id: ${record.acpSessionId || ''}`,
     `- message_count: ${Number(record.messageCount || messages.length || 0)}`, `- compaction_count: ${Number(record.compactionCount || 0)}`,
-    '', '## Summary', '', record.summary || 'Nessun contenuto rilevante.', '', '## Recent Turns', '',
+    '', '## Summary', '', record.summary || 'No relevant content.', '', '## Recent Turns', '',
     ...(recentTurns.length ? recentTurns : ['- none']), '',
   ].join('\n');
 }
@@ -625,7 +639,7 @@ function appendSessionFlushToDailyMemory(app, messages, reason = 'manual') {
   const block = [
     `## ${now.toISOString()} | ${reason}`, '', `- Sessione: ${chatSession?.id || 'unknown'}`,
     `- Messaggi: ${relevantMessages.length}`, '', '### Summary', '',
-    buildConversationSummary(relevantMessages) || 'Nessun contenuto rilevante.', '',
+    buildConversationSummary(relevantMessages) || 'No relevant content.', '',
     '### Recent Turns', '',
     ...relevantMessages.slice(-10).map((m) => `- ${String(m.role || 'unknown').toUpperCase()}: ${normalizeLine(m.text, MAX_SESSION_TURN_LENGTH)}`),
   ].join('\n');
@@ -702,7 +716,7 @@ function getBootstrapMissingFieldIds(answers = {}) {
 function buildBootstrapFollowUpPrompt(fieldIds = []) {
   const fields = BOOTSTRAP_FIELDS.filter((f) => fieldIds.includes(f.id));
   if (!fields.length) return '';
-  return `Mi manca ancora questo: ${fields.map((f) => f.label).join(', ')}. Rispondi pure in una sola frase.`;
+  return `Still need: ${fields.map((f) => f.label).join(', ')}. Please answer in a single sentence.`;
 }
 
 function parseBootstrapReasoning(reasoning = '') {
@@ -729,9 +743,9 @@ function parseBootstrapReasoning(reasoning = '') {
 
 function getBootstrapInitialPrompt() {
   return [
-    'Bootstrap iniziale.',
-    'In una sola risposta dimmi come vuoi chiamare l assistente, come vuoi che ti chiami o ti si rivolga, che ruolo deve avere, che tono deve usare, eventuali vincoli, quali strumenti o flussi deve preferire e quali progetti o contesti deve tenere presenti.',
-    'Se qualche punto non conta, scrivi nessuno o libero.',
+    'Initial setup.',
+    'In a single reply, tell me: what you want to call the assistant, how you want it to address you, what role it should have, what tone it should use, any constraints it should follow, which tools or workflows it should prefer, and which projects or contexts it should keep in mind.',
+    'If any point does not apply, just write none or leave it open.',
   ].join(' ');
 }
 
@@ -773,24 +787,24 @@ function updateBootstrapStateFromAcp(bootstrapState, reasoning = '', options = {
 function applyBootstrapAnswersToWorkspace(app, bootstrapState) {
   const answers = bootstrapState.answers || {};
   const assistantName = normalizeLine(answers.assistant_name || '', 120) || 'Nyx';
-  const preferredName = normalizeLine(answers.preferred_name || '', 140) || String(process.env.USERNAME || 'utente').trim() || 'utente';
-  const nyxRole = normalizeLine(answers.nyx_role || '', 220) || 'assistente tecnico e operativo';
-  const toneStyle = normalizeLine(answers.tone_style || '', 220) || 'diretto, sobrio, concreto';
-  const boundaries = normalizeLine(answers.boundaries || '', 280) || 'evita filler, tono enfatico, markdown inutile e promesse non verificate';
-  const toolPreferences = normalizeLine(answers.tool_preferences || '', 280) || (ENABLE_LIVE_CANVAS ? 'usa browser e canvas quando aggiungono valore reale' : 'usa browser e computer use quando aggiungono valore reale');
-  const focusContext = normalizeLine(answers.focus_context || '', 280) || 'workspace desktop locale e flussi ACP dell utente';
+  const preferredName = normalizeLine(answers.preferred_name || '', 140) || String(process.env.USERNAME || 'user').trim() || 'user';
+  const nyxRole = normalizeLine(answers.nyx_role || '', 220) || 'technical and operational assistant';
+  const toneStyle = normalizeLine(answers.tone_style || '', 220) || 'direct, concise, concrete';
+  const boundaries = normalizeLine(answers.boundaries || '', 280) || 'avoid filler, emphatic tone, unnecessary markdown, and unverified promises';
+  const toolPreferences = normalizeLine(answers.tool_preferences || '', 280) || (ENABLE_LIVE_CANVAS ? 'use browser and canvas when they add real value' : 'use browser and computer use when they add real value');
+  const focusContext = normalizeLine(answers.focus_context || '', 280) || 'local desktop workspace and user ACP workflows';
 
-  writeTextFile(getWorkspaceFilePath(app, 'USER.md'), ['# USER', '', `- Nome preferito: ${preferredName}`, `- Contesto principale: ${focusContext}`, '- Aggiorna questo file con preferenze durevoli e istruzioni personali stabili.'].join('\n'), WORKSPACE_FILE_MAX_CHARS);
-  writeTextFile(getWorkspaceFilePath(app, 'IDENTITY.md'), ['# IDENTITY', '', `- Nome: ${assistantName}`, ENABLE_LIVE_CANVAS ? '- Tipo: avatar desktop con chat, canvas e browser operativo' : '- Tipo: avatar desktop con chat, browser e computer use operativo', `- Ruolo di default: ${nyxRole}`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
-  writeTextFile(getWorkspaceFilePath(app, 'SOUL.md'), ['# SOUL', '', `${assistantName} e un avatar desktop pragmatico, lucido e concreto.`, `Stile: ${toneStyle}.`, `Vincoli: ${boundaries}.`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
-  writeTextFile(getWorkspaceFilePath(app, 'AGENTS.md'), ['# AGENTS', '', `- Ruolo operativo principale: ${nyxRole}.`, `- Tono richiesto: ${toneStyle}.`, `- Contesto di default: ${focusContext}.`, `- Vincoli duri: ${boundaries}.`, '- Se emerge una preferenza stabile, proponi di salvarla nel workspace.'].join('\n'), WORKSPACE_FILE_MAX_CHARS);
-  writeTextFile(getWorkspaceFilePath(app, 'TOOLS.md'), ['# TOOLS', '', '- ACP diretto tramite Qwen CLI con resume di sessione.', '- Browser reale tramite PinchTab.', ...(ENABLE_LIVE_CANVAS ? ['- Canvas laterale per testo, clipboard, file, immagini, video e audio.'] : ['- Computer use reale per finestre, controlli e input desktop.']), `- Preferenze d uso: ${toolPreferences}.`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
+  writeTextFile(getWorkspaceFilePath(app, 'USER.md'), ['# USER', '', `- Preferred name: ${preferredName}`, `- Primary context: ${focusContext}`, '- Update this file with durable preferences and stable personal instructions.'].join('\n'), WORKSPACE_FILE_MAX_CHARS);
+  writeTextFile(getWorkspaceFilePath(app, 'IDENTITY.md'), ['# IDENTITY', '', `- Name: ${assistantName}`, ENABLE_LIVE_CANVAS ? '- Type: desktop avatar with chat, canvas, and browser' : '- Type: desktop avatar with chat, browser, and computer use', `- Default role: ${nyxRole}`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
+  writeTextFile(getWorkspaceFilePath(app, 'SOUL.md'), ['# SOUL', '', `${assistantName} is a pragmatic, clear-headed, and concrete desktop avatar.`, `Style: ${toneStyle}.`, `Constraints: ${boundaries}.`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
+  writeTextFile(getWorkspaceFilePath(app, 'AGENTS.md'), ['# AGENTS', '', `- Primary operational role: ${nyxRole}.`, `- Required tone: ${toneStyle}.`, `- Default context: ${focusContext}.`, `- Hard constraints: ${boundaries}.`, '- If a stable preference emerges, suggest saving it to the workspace.'].join('\n'), WORKSPACE_FILE_MAX_CHARS);
+  writeTextFile(getWorkspaceFilePath(app, 'TOOLS.md'), ['# TOOLS', '', '- Direct ACP via Qwen CLI with session resume.', '- Real browser via PinchTab.', ...(ENABLE_LIVE_CANVAS ? ['- Side canvas for text, clipboard, files, images, video, and audio.'] : ['- Real computer use for windows, controls, and desktop input.']), `- Usage preferences: ${toolPreferences}.`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
 }
 
 function completeWorkspaceBootstrap(app) {
   const bootstrapPath = getWorkspaceFilePath(app, 'BOOTSTRAP.md');
   if (fs.existsSync(bootstrapPath)) fs.rmSync(bootstrapPath, { force: true });
-  return { ok: true, message: 'Bootstrap completato. BOOTSTRAP.md rimosso dal workspace.' };
+  return { ok: true, message: 'Bootstrap complete. BOOTSTRAP.md removed from workspace.' };
 }
 
 // ============================================================
@@ -807,7 +821,7 @@ async function runLocalChatCommand(app, text, chatHistory, chatSession, acpSessi
   }
   if (input === '/bootstrap status') {
     const currentQuestion = bootstrapState.active ? String(bootstrapState.currentPrompt || '').trim() : '';
-    return { message: createSystemMessage([`Bootstrap attivo: ${bootstrapState.active ? 'si' : 'no'}`, `Bootstrap pendente: ${workspaceState.bootstrapPending ? 'si' : 'no'}`, `Round: ${Number(bootstrapState.stepIndex || 0)}`, currentQuestion ? `Domanda corrente: ${currentQuestion}` : 'Domanda corrente: nessuna'].join('\n')), replaceHistory: false };
+    return { message: createSystemMessage([`Bootstrap active: ${bootstrapState.active ? 'yes' : 'no'}`, `Bootstrap pending: ${workspaceState.bootstrapPending ? 'yes' : 'no'}`, `Round: ${Number(bootstrapState.stepIndex || 0)}`, currentQuestion ? `Current question: ${currentQuestion}` : 'Current question: none'].join('\n')), replaceHistory: false };
   }
   if (input === '/workspace open') {
     const result = await openWorkspaceFolderFn(app);
@@ -818,33 +832,33 @@ async function runLocalChatCommand(app, text, chatHistory, chatSession, acpSessi
   }
   if (input === '/memory flush') {
     const flushedPath = appendSessionFlushFn(chatHistory.slice(0, -1), 'manual-flush');
-    return { message: createSystemMessage(flushedPath ? `Sessione salvata in ${path.relative(getWorkspacePath(app), flushedPath).replace(/\\/g, '/')}.` : 'Nessun contenuto utile da salvare in memory/YYYY-MM-DD.md.'), replaceHistory: false };
+    return { message: createSystemMessage(flushedPath ? `Session saved to ${path.relative(getWorkspacePath(app), flushedPath).replace(/\\/g, '/')}.` : 'No useful content to save to memory/YYYY-MM-DD.md.'), replaceHistory: false };
   }
   if (input.startsWith('/memory search ')) {
     const query = rawInput.slice('/memory search '.length).trim();
     const results = runMemorySearch(app, query, { maxResults: MEMORY_SEARCH_MAX_RESULTS });
-    return { message: createSystemMessage(results.length ? `Memory search:\n${results.map((item, i) => `${i + 1}. ${item.path}\n${item.snippet}`).join('\n\n')}` : 'Nessun risultato in MEMORY.md o nelle daily notes.'), replaceHistory: false };
+    return { message: createSystemMessage(results.length ? `Memory search:\n${results.map((item, i) => `${i + 1}. ${item.path}\n${item.snippet}`).join('\n\n')}` : 'No results in MEMORY.md or daily notes.'), replaceHistory: false };
   }
   if (input.startsWith('/memory get ')) {
     const args = rawInput.slice('/memory get '.length).trim().split(/\s+/);
     const result = runMemoryGet(app, args[0] || '', args[1] || 1, args[2] || 40);
-    return { message: createSystemMessage(result.ok ? `${result.path}:${result.startLine}-${result.endLine}\n${result.text || '[vuoto]'}` : result.error), replaceHistory: false };
+    return { message: createSystemMessage(result.ok ? `${result.path}:${result.startLine}-${result.endLine}\n${result.text || '[empty]'}` : result.error), replaceHistory: false };
   }
   if (input === '/session status') {
-    return { message: createSystemMessage([`Sessione: ${chatSession.id || 'assente'}`, `Creata: ${chatSession.createdAt || '-'}`, `Ultimo uso: ${chatSession.lastUsedAt || '-'}`, `Messaggi: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`, `ACP session: ${acpSession.id || 'assente'}`].join('\n')), replaceHistory: false };
+    return { message: createSystemMessage([`Session: ${chatSession.id || 'none'}`, `Created: ${chatSession.createdAt || '-'}`, `Last used: ${chatSession.lastUsedAt || '-'}`, `Messages: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`, `ACP session: ${acpSession.id || 'none'}`].join('\n')), replaceHistory: false };
   }
   if (input.startsWith('/session search ')) {
     const query = rawInput.slice('/session search '.length).trim();
     const results = runSessionSearch(app, query, { maxResults: SESSION_SEARCH_MAX_RESULTS });
-    return { message: createSystemMessage(results.length ? `Session search:\n${results.map((item, i) => `${i + 1}. ${item.id} (${item.updatedAt || 'n/a'})\n${item.snippet}`).join('\n\n')}` : 'Nessuna sessione salvata corrisponde alla query.'), replaceHistory: false };
+    return { message: createSystemMessage(results.length ? `Session search:\n${results.map((item, i) => `${i + 1}. ${item.id} (${item.updatedAt || 'n/a'})\n${item.snippet}`).join('\n\n')}` : 'No saved sessions match the query.'), replaceHistory: false };
   }
   if (input === '/compact') {
     const result = compactCurrentSessionHistoryFn(app, chatHistory, chatSession);
-    return { message: createSystemMessage(result.ok ? 'Sessione compattata. Ho sostituito la parte centrale con un summary persistente.' : result.error), replaceHistory: true };
+    return { message: createSystemMessage(result.ok ? 'Session compacted. Replaced the middle section with a persistent summary.' : result.error), replaceHistory: true };
   }
   if (input === '/new' || input === '/reset') {
     startFreshSessionFn(app, chatHistory, chatSession, acpSession, 'new-session');
-    return { message: createSystemMessage('Sessione resettata. Transcript flushato nella daily note e contesto locale ripulito.'), replaceHistory: true };
+    return { message: createSystemMessage('Session reset. Transcript flushed to daily note and local context cleared.'), replaceHistory: true };
   }
   return null;
 }
@@ -853,24 +867,24 @@ function createWorkspaceStatusText(app, workspaceState, chatSession, chatHistory
   const fileSummary = workspaceState.files.filter((f) => f.exists).map((f) => f.name).join(', ');
   return [
     `Workspace: ${workspaceState.path}`, `Sessions dir: ${getSessionsDirPath(app)}`,
-    `Bootstrap pendente: ${workspaceState.bootstrapPending ? 'si' : 'no'}`,
-    `BOOT attivo al prossimo prompt: ${workspaceState.startupBootPending ? 'si' : 'no'}`,
-    `Sessione locale: ${chatSession.id || 'assente'}`,
-    chatSession.id ? `Session markdown: ${getSessionMarkdownPath(app, chatSession.id)}` : 'Session markdown: assente',
-    `Messaggi in sessione: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`,
-    workspaceState.memoryFile ? `Memoria lunga: ${workspaceState.memoryFile}` : 'Memoria lunga: assente',
-    workspaceState.dailyNotes.length ? `Daily notes: ${workspaceState.dailyNotes.map((n) => n.relativePath).join(', ')}` : 'Daily notes: nessuna',
-    fileSummary ? `File presenti: ${fileSummary}` : 'File presenti: nessuno',
+    `Bootstrap pending: ${workspaceState.bootstrapPending ? 'yes' : 'no'}`,
+    `BOOT active on next prompt: ${workspaceState.startupBootPending ? 'yes' : 'no'}`,
+    `Local session: ${chatSession.id || 'none'}`,
+    chatSession.id ? `Session markdown: ${getSessionMarkdownPath(app, chatSession.id)}` : 'Session markdown: none',
+    `Messages in session: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`,
+    workspaceState.memoryFile ? `Long-term memory: ${workspaceState.memoryFile}` : 'Long-term memory: none',
+    workspaceState.dailyNotes.length ? `Daily notes: ${workspaceState.dailyNotes.map((n) => n.relativePath).join(', ')}` : 'Daily notes: none',
+    fileSummary ? `Files present: ${fileSummary}` : 'Files present: none',
   ].join('\n');
 }
 
 function runMemoryGet(app, requestPath, startLine = 1, lineCount = 40) {
-  const workspaceRoot = getWorkspacePath(app);
-  const trimmed = String(requestPath || '').trim().replace(/^[/\\]+/, '');
-  if (!trimmed) return { ok: false, error: 'Memory file non trovato nel workspace.' };
-  const resolved = path.resolve(workspaceRoot, trimmed);
-  if (!resolved.startsWith(workspaceRoot)) return { ok: false, error: 'Path fuori dal workspace.' };
-  if (!fs.existsSync(resolved)) return { ok: false, error: 'Memory file non trovato nel workspace.' };
+  const trimmedRequestPath = String(requestPath || '').trim().replace(/^[/\\]+/, '');
+  if (!trimmedRequestPath) return { ok: false, error: 'Memory file not found in workspace.' };
+  const workspacePath = resolveWorkspacePath(app, requestPath);
+  if (!workspacePath) return { ok: false, error: 'Path is outside the workspace.' };
+  const { resolved, workspaceRoot } = workspacePath;
+  if (!fs.existsSync(resolved)) return { ok: false, error: 'Memory file not found in workspace.' };
 
   const lines = readTextFile(resolved, '').split(/\r?\n/);
   const from = Math.max(1, Number(startLine) || 1);
@@ -880,12 +894,7 @@ function runMemoryGet(app, requestPath, startLine = 1, lineCount = 40) {
 }
 
 function resolveWorkspaceRequestPath(app, requestPath = '') {
-  const trimmed = String(requestPath || '').trim().replace(/^[/\\]+/, '');
-  if (!trimmed) return null;
-  const resolved = path.resolve(getWorkspacePath(app), trimmed);
-  const workspaceRoot = path.resolve(getWorkspacePath(app));
-  if (!resolved.startsWith(workspaceRoot)) return null;
-  return resolved;
+  return resolveWorkspacePath(app, requestPath)?.resolved || null;
 }
 
 module.exports = {
@@ -910,6 +919,7 @@ module.exports = {
   readTextFile,
   writeTextFile,
   ensureDirectory,
+  resolveWorkspacePath,
 
   // Workspace
   getWorkspaceMemoryFileName,
@@ -976,5 +986,6 @@ module.exports = {
   // Utilities
   normalizeLine,
   truncatePromptText,
+  truncateWithMarker,
   normalizeSpeechText,
 };

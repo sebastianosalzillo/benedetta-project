@@ -4476,11 +4476,11 @@ class TalkingHead {
       }
     }
 
-    // Restart pose animation
-    let anim = this.animQueue.find( x => x.template.name === 'pose' );
-    if ( anim ) {
-      anim.ts[0] = this.animClock;
-    }
+    // NOTE: Do NOT reset pose timer here — playPose() already set it to a
+    // future time. Resetting it to animClock cancels the extension applied
+    // by playPose(), causing poses to end immediately.
+    // The pose will naturally expire when its timer expires, or can be
+    // explicitly stopped via stopPose().
 
     if ( this.avatar ) {
       this.setPoseFromTemplate( null );
@@ -4579,10 +4579,42 @@ class TalkingHead {
   }
 
   /**
-  * Stop the pose. (Functionality is the same as in stopAnimation.)
+  * Stop the pose. Unlike stopAnimation(), this explicitly resets the pose
+  * timer so the current pose ends immediately.
   */
   stopPose() {
-    this.stopAnimation();
+    // Stop mixer (same as stopAnimation)
+    if (this.mixer) {
+      this.mixer.removeEventListener('finished', this._mixerHandler);
+      this.mixer.stopAllAction();
+      this.mixer.uncacheRoot(this.armature);
+      this.mixer = null;
+      this._mixerHandler = null;
+    }
+
+    // Restart gesture (same as stopAnimation)
+    if ( this.gesture ) {
+      for( let [p,v] of Object.entries(this.gesture) ) {
+        v.t = this.animClock;
+        v.d = 1000;
+        if ( this.poseTarget.props.hasOwnProperty(p) ) {
+          this.poseTarget.props[p].copy(v);
+          this.poseTarget.props[p].t = this.animClock;
+          this.poseTarget.props[p].d = 1000;
+        }
+      }
+    }
+
+    // Explicitly reset pose timer — this is what differentiates stopPose
+    // from stopAnimation. We want the pose to end NOW.
+    let anim = this.animQueue.find( x => x.template.name === 'pose' );
+    if ( anim ) {
+      anim.ts[0] = this.animClock;
+    }
+
+    if ( this.avatar ) {
+      this.setPoseFromTemplate( null );
+    }
   }
 
   /**

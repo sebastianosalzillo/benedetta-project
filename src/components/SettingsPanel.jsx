@@ -11,6 +11,8 @@ function SettingsPanel({
   isBusy,
 }) {
   const options = Array.isArray(brain?.options) ? brain.options : [];
+  const ollamaHostInputId = 'ollama-host-input';
+  const ollamaModelInputId = 'ollama-model-input';
   const [ollamaHost, setOllamaHost] = React.useState(brain?.ollama?.host || 'http://127.0.0.1:11434');
   const [ollamaModel, setOllamaModel] = React.useState(brain?.ollama?.model || 'qwen3.5:0.8b');
 
@@ -23,7 +25,7 @@ function SettingsPanel({
     <div className="settings-shell">
       <div className="settings-header">
         <div>
-          <div className="settings-eyebrow">Impostazioni</div>
+          <div className="settings-eyebrow">Settings</div>
           <div className="settings-title">Brain ACP</div>
         </div>
         <div className="settings-actions settings-actions-header">
@@ -32,11 +34,13 @@ function SettingsPanel({
             className="toolbar-pill"
             onClick={() => onTestBrain(brain?.selectedId)}
             disabled={isBusy || testPending}
+            aria-busy={testPending}
+            aria-label={testPending ? 'Test del brain in corso' : 'Esegui test del brain selezionato'}
           >
             {testPending ? 'Test in corso...' : 'Test brain'}
           </button>
-          <button type="button" className="toolbar-pill" onClick={onBack}>
-            Torna alla chat
+          <button type="button" className="toolbar-pill" onClick={onBack} aria-label="Back to chat">
+            Back to chat
           </button>
         </div>
       </div>
@@ -49,7 +53,7 @@ function SettingsPanel({
       )}
 
       {testResult && (
-        <div className={`brain-test-card ${testResult.ok ? 'brain-test-card-ok' : 'brain-test-card-error'}`}>
+        <div className={`brain-test-card ${testResult.ok ? 'brain-test-card-ok' : 'brain-test-card-error'}`} role="status" aria-live="polite">
           <div className="brain-test-title">Test {testResult.brainId || brain?.selectedId}</div>
           <div className="brain-test-text">{testResult.message}</div>
         </div>
@@ -65,6 +69,8 @@ function SettingsPanel({
               className={`brain-option ${isSelected ? 'brain-option-selected' : ''}`}
               onClick={() => onSelectBrain(option.id)}
               disabled={isBusy}
+              aria-pressed={isSelected}
+              aria-label={`${option.label} ${option.available ? 'disponibile' : 'non disponibile'}${isSelected ? ', selezionato' : ''}`}
             >
               <div className="brain-option-header">
                 <div>
@@ -92,23 +98,25 @@ function SettingsPanel({
         <div className="ollama-card">
           <div className="brain-option-header">
             <div>
-              <div className="brain-option-title">Configura Ollama</div>
-              <div className="brain-option-subtitle">Usato solo quando selezioni Ollama come brain.</div>
+              <div className="brain-option-title">Configure Ollama</div>
+              <div className="brain-option-subtitle">Used only when Ollama is selected as brain.</div>
             </div>
           </div>
 
-          <label className="settings-field">
+          <label className="settings-field" htmlFor={ollamaHostInputId}>
             <span className="settings-label">Host</span>
             <input
+              id={ollamaHostInputId}
               value={ollamaHost}
               onChange={(event) => setOllamaHost(event.target.value)}
               placeholder="http://127.0.0.1:11434"
             />
           </label>
 
-          <label className="settings-field">
+          <label className="settings-field" htmlFor={ollamaModelInputId}>
             <span className="settings-label">Model</span>
             <input
+              id={ollamaModelInputId}
               value={ollamaModel}
               onChange={(event) => setOllamaModel(event.target.value)}
               placeholder="qwen3.5:0.8b"
@@ -127,8 +135,9 @@ function SettingsPanel({
               className="toolbar-pill"
               onClick={() => onSaveOllama({ host: ollamaHost, model: ollamaModel })}
               disabled={isBusy}
+              aria-label="Save Ollama configuration"
             >
-              Salva Ollama
+              Save Ollama
             </button>
           </div>
         </div>

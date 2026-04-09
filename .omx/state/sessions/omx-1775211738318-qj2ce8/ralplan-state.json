@@ -1,0 +1,32 @@
+{
+  "active": false,
+  "started_at": "2026-04-03T10:39:00Z",
+  "current_phase": "completed",
+  "task_description": "Consensus deliberate plan for broad dedup/refactor of the app using .omx/specs/deep-interview-bottlenecks-malfunzionamenti-miglioramenti.md",
+  "profile": "deliberate",
+  "source_spec": ".omx/specs/deep-interview-bottlenecks-malfunzionamenti-miglioramenti.md",
+  "prd_path": ".omx/plans/prd-bottlenecks-malfunzionamenti-miglioramenti.md",
+  "test_spec_path": ".omx/plans/test-spec-bottlenecks-malfunzionamenti-miglioramenti.md",
+  "consensus_status": "approved-after-1-revision",
+  "notes": [
+    "Broad refactor/dedup across application codebase",
+    "Breaking changes externally allowed",
+    "Excluded: build/, dist/, asset/vendor, public/talkinghead",
+    "Planner artifact grounded with repository file/line references",
+    "Architect feedback incorporated: first slice ordering, phase gates, preload↔ipcMain↔renderer verification, concrete verification commands"
+  ],
+  "completed_at": "2026-04-03T10:55:00Z",
+  "summary": "Consensus plan approved in deliberate mode for broad dedup/refactor. Plan includes phase gates, grounded duplicate clusters, preload/ipc contract checks, concrete verification commands, and a first execution slice recommendation.",
+  "spec_path": ".omx/specs/deep-interview-bottlenecks-malfunzionamenti-miglioramenti.md",
+  "mode": "consensus-deliberate",
+  "iteration": 1,
+  "current_step": "critic-review-retry",
+  "verdict": "APPROVED",
+  "decision": "hybrid staged rewrite",
+  "status": "approved",
+  "sources": [
+    "https://www.electronjs.org/docs/latest/tutorial/performance",
+    "https://playwright.dev/docs/actionability",
+    "https://pywinauto.readthedocs.io/en/latest/wait_long_operations.html"
+  ]
+}

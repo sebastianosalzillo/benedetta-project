@@ -9,6 +9,12 @@ const {
   MAX_PROMPT_LINE_LENGTH,
 } = require('./constants');
 const fs = require('fs');
+const { normalizeLine } = require('./workspace-manager');
+
+// ACP protocol compatibility note:
+// This runtime implements ACP v1 (Qwen Code CLI JSON-RPC over stdio).
+// ACP v2 (JetBrains 2025.3+) is a different, incompatible spec — do NOT
+// connect a JetBrains 2025.3+ ACP server to this runtime.
 
 /**
  * Strip ANSI escape codes from text.
@@ -21,24 +27,13 @@ function stripAnsi(text) {
 }
 
 /**
- * Normalize a line of text to a max length.
- */
-function normalizeLine(text, maxLength) {
-  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
-}
-
-/**
- * Extract speech preview from raw ACP output by stripping tokens and reasoning tags.
+ * Extract speech preview from raw ACP output by stripping reasoning tags.
+ * JSON-only mode: no ACT/CANVAS/BROWSER/COMPUTER/WORKSPACE tokens to strip.
  */
 function extractSpeechPreview(raw, reasoningTagNames) {
   let preview = String(raw || '');
-  preview = preview.replace(/<\|ACT[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|CANVAS[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|BROWSER[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|COMPUTER[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|WORKSPACE[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|DELAY:\s*\d+(?:\.\d+)?\|>/gi, '');
 
+  // Strip reasoning tags only (no action tokens in JSON-only mode)
   for (const tagName of reasoningTagNames) {
     const regex = new RegExp(`<${tagName}>[\\s\\S]*?</${tagName}>`, 'gi');
     preview = preview.replace(regex, '');
@@ -463,6 +458,5 @@ module.exports = {
   QwenAcpRuntime,
   extractSpeechPreview,
   stripAnsi,
-  normalizeLine,
   contentBlockToText,
 };

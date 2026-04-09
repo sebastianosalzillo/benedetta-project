@@ -11,6 +11,7 @@ function createDefaultDreamState() {
     lastDreamAt: null,
     dreamCount: 0,
     timerId: null,
+    lastHistoryLen: 0, // Fix B: deduplication
   };
 }
 
@@ -73,7 +74,7 @@ function analyzeConversation(chatHistory) {
   };
 }
 
-function generateDreamNote(analysis) {
+function generateDreamNote(analysis, conversationSummary) {
   const now = new Date();
   const dateKey = now.toISOString().slice(0, 10);
   const lines = [
@@ -88,7 +89,7 @@ function generateDreamNote(analysis) {
     analysis.topics.length ? `## Argomenti Discussi\n${analysis.topics.map((t) => `- ${t}`).join('\n')}` : '',
     '',
     `## Summary`,
-    'Sessione analizzata durante dream mode. Preferenze e argomenti estratti per memoria a lungo termine.',
+    conversationSummary || 'Nessun contenuto rilevante.',
   ].filter(Boolean);
 
   return { dateKey, content: lines.join('\n') };

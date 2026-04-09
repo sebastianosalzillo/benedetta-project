@@ -26,10 +26,21 @@ function loadSkills() {
 
   for (const entry of entries) {
     const skillPath = path.join(SKILLS_DIR, entry);
-    if (!entry.endsWith('.js')) continue;
+    let modulePath = null;
+
+    if (entry.endsWith('.js')) {
+      modulePath = skillPath;
+    } else {
+      const indexPath = path.join(skillPath, 'index.js');
+      if (fs.existsSync(indexPath)) {
+        modulePath = indexPath;
+      }
+    }
+
+    if (!modulePath) continue;
 
     try {
-      const mod = require(skillPath);
+      const mod = require(modulePath);
       if (mod.name && mod.handler) {
         skills.push({
           id: mod.id || `skill-${entry.replace('.js', '')}`,
