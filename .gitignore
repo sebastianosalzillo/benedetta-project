@@ -64,3 +64,8 @@ $null
 # Editor
 .vscode/settings.json
 .idea/
+
+# AI agent internal states
+.claude/
+.omx/
+tasklist.json
