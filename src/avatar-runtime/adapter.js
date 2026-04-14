@@ -57,7 +57,6 @@ const EMOJI_TO_MOOD = {
   '\u{1F61E}': 'Sad',
   '\u{1F614}': 'Sad',
   '\u2639\uFE0F': 'Sad',
-  '\u{1F633}': 'Happy',
   '\u{1F61A}': 'Love',
   '\u{1F618}': 'Love',
   '\u{1F621}': 'Angry',
@@ -339,13 +338,17 @@ export function buildSpeakScript({ text, audioBase64, mood, expression, requestI
     (async () => {
       const h = window.head;
       if (!h) return null;
-      if (h.audioCtx && h.audioCtx.state === 'suspended') {
-        await h.audioCtx.resume();
+      try {
+        if (h.audioCtx && h.audioCtx.state === 'suspended') {
+          await h.audioCtx.resume();
+        }
+      } catch (resumeErr) {
+        console.warn('[nyx-speak] audioCtx.resume() failed:', resumeErr);
       }
 
       try { h.stopSpeaking(); } catch {}
       try { h.setMood('${resolvedMood}'); } catch {}
-      try { h.setMood('${resolvedExpression}'); } catch {}
+      try { h.setExpression('${resolvedExpression}'); } catch {}
 
       const binaryString = window.atob('${audioBase64 || ''}');
       const bytes = new Uint8Array(binaryString.length);
@@ -353,7 +356,13 @@ export function buildSpeakScript({ text, audioBase64, mood, expression, requestI
         bytes[i] = binaryString.charCodeAt(i);
       }
 
-      const decodedAudio = await h.audioCtx.decodeAudioData(bytes.buffer);
+      let decodedAudio;
+      try {
+        decodedAudio = await h.audioCtx.decodeAudioData(bytes.buffer);
+      } catch (decodeErr) {
+        console.error('[nyx-speak] decodeAudioData failed:', decodeErr);
+        return null;
+      }
       const durationMs = decodedAudio.duration * 1000;
       // Do NOT pass visemes/vtimes/vdurations — let talkinghead.mjs calculate them
       // automatically from the text using lipsyncPreProcessText + lipsyncWordsToVisemes.
@@ -674,7 +683,12 @@ export class AvatarRuntimeAdapter {
   async exec(code) {
     const wv = this.webviewRef.current;
     if (!wv || !this.isLoaded) return null;
-    return wv.executeJavaScript(code);
+    try {
+      return await wv.executeJavaScript(code);
+    } catch (err) {
+      console.error('[nyx-adapter] executeJavaScript error:', err?.message || err);
+      return null;
+    }
   }
 
   /**

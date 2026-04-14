@@ -248,7 +248,7 @@ function parseActPayload(payloadText, fallbackText = '') {
 
     return {
       emotion: emotion || 'neutral',
-      intensity: Number.isFinite(Number(json.intensity)) ? Number(json.intensity) : 0.72,
+      intensity: Number.isFinite(Number(json.intensity)) ? Math.max(0, Math.min(1, Number(json.intensity))) : 0.72,
       pose: json.pose ? String(json.pose).trim().toLowerCase() : null,
       animation: json.animation ? String(json.animation).trim() : null,
       gesture: json.gesture ? String(json.gesture).trim() : (style.motionType === 'gesture' ? style.motion : null),
@@ -266,7 +266,7 @@ function parseActPayload(payloadText, fallbackText = '') {
 
     return {
       emotion: emotion || 'neutral',
-      intensity: intensity != null ? intensity : 0.72,
+      intensity: intensity != null ? Math.max(0, Math.min(1, intensity)) : 0.72,
       pose: readLooseActField(text, ['pose']).toLowerCase() || null,
       animation: readLooseActField(text, ['animation']) || null,
       gesture: readLooseActField(text, ['gesture']) || (style.motionType === 'gesture' ? style.motion : null),
