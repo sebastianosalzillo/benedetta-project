@@ -13,7 +13,9 @@ TASK.md
 REFACTOR_PLAN.md
 ANTIGRAVITY.md
 AVATAR_CAPABILITIES.md
+AVATAR_REVIEW.md
 design-system.md
+electron/fix_main.js
 
 # Dependencies
 node_modules/

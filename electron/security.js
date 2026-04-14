@@ -69,8 +69,8 @@ function isChatScreenSender(event) {
   try {
     const parsed = new URL(senderUrl);
     const screen = parsed.searchParams.get('screen');
-    // If no screen is specified, we default to 'chat' for compatibility or security 
-    // depends on the default window URL. In our app, windows are always created with screen param.
+    // All windows are created with an explicit ?screen= param. A missing param means
+    // an unexpected origin and should be rejected.
     return screen === 'chat';
   } catch {
     return false;

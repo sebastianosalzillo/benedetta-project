@@ -19,9 +19,8 @@ const {
   buildBootstrapAnswersPrompt,
 } = require('./workspace-manager');
 
-/**
- * Prompt Factory - Extracts prompt generation logic from main.js
- */
+const SYSTEM_PROMPT_TEMPLATE = fs.readFileSync(path.join(__dirname, 'prompts', 'system_prompt.md'), 'utf-8');
+const BOOTSTRAP_PROMPT_TEMPLATE = fs.readFileSync(path.join(__dirname, 'prompts', 'bootstrap_prompt.md'), 'utf-8');
 
 function buildDirectAcpPrompt(userText, context = {}) {
   const { 
@@ -73,7 +72,7 @@ function buildDirectAcpPrompt(userText, context = {}) {
   const dailyMemoryBlock = wmBuildRecentDailyMemoryPrompt(app, 2);
 
   return [
-    fs.readFileSync(path.join(__dirname, 'prompts', 'system_prompt.md'), 'utf-8').replace('{{WORKSPACE_ROOT}}', `Workspace root: ${getWorkspacePath(app)}`),
+    SYSTEM_PROMPT_TEMPLATE.replace('{{WORKSPACE_ROOT}}', `Workspace root: ${getWorkspacePath(app)}`),
     '',
     workspaceBlock,
     startupBootBlock,
@@ -105,7 +104,7 @@ function buildBootstrapAcpPrompt(userText, options = {}, context = {}) {
   });
 
   return [
-    fs.readFileSync(path.join(__dirname, 'prompts', 'bootstrap_prompt.md'), 'utf-8'),
+    BOOTSTRAP_PROMPT_TEMPLATE,
     '',
     workspaceBlock,
     bootstrapAnswerBlock,

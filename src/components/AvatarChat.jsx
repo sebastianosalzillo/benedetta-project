@@ -96,7 +96,7 @@ function AvatarChat({
           type="button"
           className="toolbar-pill"
           onClick={onOpenSettings}
-          aria-label="Apri impostazioni brain"
+          aria-label="Open brain settings"
         >
           ⚙ Settings
         </button>
@@ -236,7 +236,7 @@ function AvatarChat({
           placeholder="Type a message... (Enter to send · Shift+Enter for new line)"
           rows={3}
           disabled={isBusy}
-          aria-label="Messaggio per Nyx"
+          aria-label="Message for Nyx"
         />
         <div className="chat-form-actions">
           {canStop && (
