@@ -61,15 +61,16 @@ async function main() {
     await chatWindow.locator('button[aria-label="Apri impostazioni brain"]').waitFor({ state: 'visible', timeout: 15000 });
     await chatWindow.locator('.chat-toolbar').waitFor({ state: 'visible', timeout: 15000 });
 
+    const avatarWindow = await waitForWindow(async (windowHandle) => {
+      const title = await windowHandle.title();
+      return title.includes('Talking Head') || windowHandle.url().includes('/talkinghead/index.html');
+    }, electronApp);
+
     const allWindows = electronApp.windows();
 
-    // After A5: avatar window loads talkinghead directly (no webview).
-    // Verify at least 2 windows exist (chat + avatar).
+    // Avatar window loads talkinghead directly and is created after chat settles.
     assert(allWindows.length >= 2, `Expected at least 2 Electron windows, got ${allWindows.length}.`);
-
-    // Verify avatar window has the expected title
-    const avatarWindow = allWindows.find((w) => w.title().then((t) => t.includes('Avatar ACP')).catch(() => false));
-    assert(avatarWindow, 'Avatar ACP window should be present');
+    assert(avatarWindow, 'Talking Head avatar window should be present');
 
     console.log('Electron E2E smoke passed.');
   } finally {

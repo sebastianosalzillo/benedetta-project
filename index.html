@@ -7,7 +7,7 @@
       http-equiv="Content-Security-Policy"
       content="
         default-src 'self' app: data: blob:;
-        script-src 'self' 'unsafe-inline' 'unsafe-eval' app: http://localhost:5174 http://127.0.0.1:5174;
+        script-src 'self' 'unsafe-inline' app: http://localhost:5174 http://127.0.0.1:5174;
         style-src 'self' 'unsafe-inline';
         img-src 'self' app: data: blob:;
         font-src 'self' data:;
@@ -15,7 +15,6 @@
         media-src 'self' app: data: blob:;
         object-src 'none';
         base-uri 'self';
-        frame-ancestors 'none';
         form-action 'self';
       "
     />

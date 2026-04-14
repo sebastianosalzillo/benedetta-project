@@ -154,6 +154,98 @@ const {
   trimPrompt,
 } = require('./prompt-optimizer');
 const {
+  parsePhasePlan,
+  normalizeLegacyResponseToPhasePlan,
+  parseInlineResponse,
+} = require('./response-parser');
+const playback = require('./avatar-playback');
+const orchestrator = require('./agent-orchestrator');
+
+// ============================================================
+// Initialize Orchestrator and Playback Bridges
+// ============================================================
+
+const {
+  buildDirectAcpPrompt,
+  buildBootstrapAcpPrompt,
+  buildAutoToolBatchStartText,
+  buildAutoToolBatchCompleteText,
+  buildToolResultPrompt,
+  formatToolListForSpeech,
+} = require('./prompt-factory');
+
+const orchestratorContext = {
+  MAX_AGENT_TURNS: 15,
+  getActiveResponseId: () => activeResponseId,
+  setActiveResponseId: (val) => { activeResponseId = val; },
+  activeChatRequest: () => activeChatRequest,
+  setActiveChatRequest: (val) => { activeChatRequest = val; },
+  runAcpTurn: (...args) => runAcpTurn(...args),
+  normalizeLegacyResponseToPhasePlan,
+  emitPhaseStreamEvent: (...args) => emitPhaseStreamEvent(...args),
+  createMessageId,
+  emitSpokenStatusUpdate: (...args) => emitSpokenStatusUpdate(...args),
+  emitPhaseAssistantMessage: (...args) => emitPhaseAssistantMessage(...args),
+  extractToolCalls: (...args) => extractToolCalls(...args),
+  extractActionCalls: (...args) => extractActionCalls(...args),
+  partitionAvailableToolCalls: (...args) => partitionAvailableToolCalls(...args),
+  buildAutoToolBatchStartText: (...args) => buildAutoToolBatchStartText(...args),
+  handleBrowserDirective: (...args) => handleBrowserDirective(...args),
+  canvasState: () => canvasState,
+  buildBrowserActionExecutionResult: (...args) => buildBrowserActionExecutionResult(...args),
+  handleComputerDirective: (directive) => handleComputerDirective(directive, { updateComputerState, broadcastStatus }),
+  computerState: () => computerState,
+  buildComputerInteractiveSummary: (elements) => buildComputerInteractiveSummary(elements),
+  buildWindowSummary: (windows) => buildWindowSummary(windows),
+  applyWorkspaceUpdate: (directive) => applyWorkspaceUpdate(null, directive),
+  handleCanvasDirective: (...args) => handleCanvasDirective(...args),
+  executeToolCalls: (...args) => executeToolCalls(...args),
+  buildAutoToolBatchCompleteText: (...args) => buildAutoToolBatchCompleteText(...args),
+  buildToolResultPrompt: (...args) => buildToolResultPrompt(...args),
+  emitSystemChatStream: (...args) => emitSystemChatStream(...args),
+  resetBrowserAgentState: (...args) => resetBrowserAgentState(...args),
+  getSelectedBrainOption: () => getSelectedBrainOption(),
+  hasSelectedBrainLauncher: () => hasSelectedBrainLauncher(),
+  appendHistoryMessage: (...args) => appendHistoryMessage(...args),
+  emitChatStream: (...args) => emitChatStream(...args),
+  setStatus: (...args) => setStatus(...args),
+  setBrainMode: (...args) => setBrainMode(...args),
+  setStreamStatus: (...args) => setStreamStatus(...args),
+  setTtsState: (...args) => setTtsState(...args),
+  STREAM_STATUS: C.STREAM_STATUS,
+  refreshComputerState: () => refreshComputerState({ updateComputerState }),
+  buildDirectAcpPrompt: (userText) => buildDirectAcpPrompt(userText, {
+    app,
+    chatHistory,
+    nyxMemory,
+    acpSession,
+    personalityState,
+    getPersonalityPrompt,
+    workspaceState,
+    chatSession,
+    canvasState,
+    computerState,
+  }),
+  prepareAcpSessionTurn: () => prepareAcpSessionTurn(),
+  getBrainSpawnConfig: (...args) => getBrainSpawnConfig(...args),
+  sendAvatarCommand: (...args) => sendAvatarCommand(...args),
+  agentLoop: (...args) => orchestrator.agentLoop(...args),
+  markAcpSessionTurnCompleted: (...args) => markAcpSessionTurnCompleted(...args),
+  consumeStartupBootPrompt: () => consumeStartupBootPrompt(),
+  resetAcpSession: (...args) => resetAcpSession(...args),
+  stopActiveChatRequest: (...args) => stopActiveChatRequest(...args),
+  buildBootstrapAcpPrompt: (userText, options) => buildBootstrapAcpPrompt(userText, options, {
+    app,
+    bootstrapState,
+  }),
+  completeWorkspaceBootstrap: () => completeWorkspaceBootstrap(),
+  createStreamEmitter: (...args) => createStreamEmitter(...args),
+  sanitizeGenericOutput: (text) => sanitizeGenericOutput(text),
+};
+
+orchestrator.setupOrchestrator(orchestratorContext);
+
+const {
   initializeHooks,
   getHooksStatus,
   HOOK_EVENTS,
@@ -179,6 +271,13 @@ const {
   callPywinautoTool: ccCallPywinautoTool,
   readPywinautoActiveWindowDetails: ccReadPywinautoActiveWindowDetails,
   getPywinautoMcpLogTail: ccGetPywinautoMcpLogTail,
+  handleComputerDirective,
+  refreshComputerState,
+  captureComputerScreenshotWithOcr,
+  buildComputerOcrNote,
+  buildComputerInteractiveSummary,
+  buildWindowSummary,
+  getComputerForegroundRegion,
 } = require('./computer-control');
 const {
   buildBrowserTitleFromUrl: baBuildBrowserTitleFromUrl,
@@ -186,7 +285,15 @@ const {
   resolveBrowserCanvasContent: baResolveBrowserCanvasContent,
   performBrowserAction: baPerformBrowserAction,
   stopPinchtabService: baStopPinchtabService,
+  buildBrowserSnapshotSummary,
+  buildBrowserActionExecutionResult,
 } = require('./browser-agent');
+const {
+  buildDefaultWorkspaceFiles,
+  hasMeaningfulMarkdownContent,
+  extractMeaningfulMarkdownLines,
+  applyWorkspaceUpdate,
+} = require('./workspace-manager');
 // Aliases for backward compat — functions now live in browser-agent.js
 const {
   getDisplayById: wmGetDisplayById,
@@ -458,6 +565,16 @@ function createDefaultComputerState() {
     ocrStatus: 'idle',
     error: '',
   };
+}
+
+function updateComputerState(patch = {}) {
+  computerState = {
+    ...computerState,
+    ...(patch && typeof patch === 'object' ? patch : {}),
+    updatedAt: patch?.updatedAt || new Date().toISOString(),
+  };
+  broadcastStatus();
+  return computerState;
 }
 
 function createDefaultWorkspaceState() {
@@ -1010,99 +1127,22 @@ async function testBrainSelection(brainId = '') {
   if (launch.kind === 'ollama-http') {
     const status = await probeOllamaStatus(launch.url, launch.model);
     if (!status.reachable) {
-      return {
-        ok: false,
-        brainId: targetBrain.id,
-        message: status.error || 'Host Ollama non raggiungibile.',
-      };
+      return { ok: false, brainId: targetBrain.id, message: status.error || 'Host Ollama non raggiungibile.' };
     }
     if (!status.modelAvailable) {
-      return {
-        ok: false,
-        brainId: targetBrain.id,
-        message: `Model Ollama non presente: ${launch.model}`,
-      };
+      return { ok: false, brainId: targetBrain.id, message: `Model Ollama non presente: ${launch.model}` };
     }
     const payload = await generateOllamaResponse(launch.url, launch.model, 'Rispondi solo con OK.');
-    return {
-      ok: true,
-      brainId: targetBrain.id,
-      message: normalizeLine(payload?.response || 'OK', 160),
-    };
+    return { ok: true, brainId: targetBrain.id, message: normalizeLine(payload?.response || 'OK', 160) };
   }
 
-  return await new Promise((resolve) => {
-    const proc = spawn(launch.command, launch.args, {
-      cwd: path.join(__dirname, '..'),
-      env: launch.env || process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      shell: Boolean(launch.shell),
-    });
+  if (launch.kind === 'qwen-acp') {
+    await ensureQwenAcpRuntime();
+    const sessionId = await ensureQwenAcpSession({});
+    return { ok: true, brainId: targetBrain.id, message: `ACP ready: ${sessionId}` };
+  }
 
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      try {
-        proc.kill();
-      } catch {
-        // ignore kill errors
-      }
-      if (launch.promptFilePath) {
-        try {
-          fs.rmSync(launch.promptFilePath, { force: true });
-        } catch {
-          // ignore temp prompt cleanup errors
-        }
-      }
-      resolve({
-        ok: false,
-        brainId: targetBrain.id,
-        message: 'Test brain in timeout.',
-      });
-    }, 30000);
-
-    proc.stdout.on('data', (chunk) => {
-      stdout += String(chunk);
-    });
-
-    proc.stderr.on('data', (chunk) => {
-      stderr += String(chunk);
-    });
-
-    proc.on('error', (error) => {
-      clearTimeout(timer);
-      if (launch.promptFilePath) {
-        try {
-          fs.rmSync(launch.promptFilePath, { force: true });
-        } catch {
-          // ignore temp prompt cleanup errors
-        }
-      }
-      resolve({
-        ok: false,
-        brainId: targetBrain.id,
-        message: error.message || 'Errore test brain.',
-      });
-    });
-
-    proc.on('close', (code) => {
-      clearTimeout(timer);
-      if (launch.promptFilePath) {
-        try {
-          fs.rmSync(launch.promptFilePath, { force: true });
-        } catch {
-          // ignore temp prompt cleanup errors
-        }
-      }
-      const text = normalizeLine(sanitizeCliOutput(stdout || stderr, targetBrain.id) || `exit ${code}`, 220);
-      resolve({
-        ok: code === 0,
-        brainId: targetBrain.id,
-        message: text || (code === 0 ? 'OK' : `exit ${code}`),
-      });
-    });
-  });
+  return { ok: false, brainId: targetBrain.id, message: `Kind unsupported: ${launch.kind}` };
 }
 
 function getWorkspacePath() {
@@ -1153,19 +1193,7 @@ function listRecentDailyMemoryNotes(limit = 2) {
   } catch { return []; }
 }
 
-function buildDefaultWorkspaceFiles() {
-  const username = String(process.env.USERNAME || 'utente').trim() || 'utente';
-  return {
-    'AGENTS.md': ['# AGENTS', '', '- Questo workspace descrive il comportamento stabile di Nyx.', '- Rispondi in italiano, in modo diretto e sobrio.', ENABLE_LIVE_CANVAS ? '- Usa CANVAS e BROWSER solo quando aggiungono valore reale.' : '- Usa BROWSER o COMPUTER solo quando aggiungono valore reale.', '- Se emerge una preferenza durevole, proponi di salvarla nei file del workspace invece di affidarti solo alla chat.'].join('\n'),
-    'SOUL.md': ['# SOUL', '', 'Nyx e un avatar desktop pragmatico, lucido e concreto.', 'Evita entusiasmo artificiale, filler e rassicurazioni inutili.', 'Quando qualcosa e ambiguo, chiariscilo con precisione.'].join('\n'),
-    'TOOLS.md': ['# TOOLS', '', '- ACP diretto tramite Qwen CLI con resume di sessione.', '- Browser reale tramite PinchTab.', ...(ENABLE_LIVE_CANVAS ? ['- Canvas laterale per testo, clipboard, file, immagini, video e audio.'] : ['- Computer use reale per finestre, controlli e input desktop.']), '- TTS locale per playback e lipsync.'].join('\n'),
-    'IDENTITY.md': ['# IDENTITY', '', '- Nome: Nyx', ENABLE_LIVE_CANVAS ? '- Tipo: avatar desktop con chat, canvas e browser operativo' : '- Tipo: avatar desktop con chat, browser e computer use operativo', '- Modalita base: assistente tecnico e operativo'].join('\n'),
-    'USER.md': ['# USER', '', `- Utente locale principale: ${username}`, '- Ambiente principale: Windows desktop', '- Aggiorna questo file con preferenze stabili, tono, naming e flussi preferiti.'].join('\n'),
-    'HEARTBEAT.md': ['# HEARTBEAT', '', '<!-- Aggiungi qui checklist periodiche da tenere a mente. -->'].join('\n'),
-    'BOOT.md': ['# BOOT', '', '<!-- Aggiungi qui una checklist da applicare al primo prompt dopo l avvio dell app. -->'].join('\n'),
-    'BOOTSTRAP.md': ['# BOOTSTRAP', '', 'Primo avvio del workspace Nyx.', '', '1. Rivedi AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md e USER.md.', '2. Sostituisci i placeholder con istruzioni e preferenze reali.', '3. Se serve, crea MEMORY.md e i file in memory/YYYY-MM-DD.md.', '4. Quando il bootstrap e completo, esegui /bootstrap done oppure usa il pulsante dedicato nella chat.'].join('\n'),
-  };
-}
+
 
 function ensureWorkspaceBootstrap() {
   const workspacePath = getWorkspacePath();
@@ -1232,17 +1260,7 @@ function readWorkspaceState() {
   };
 }
 
-function hasMeaningfulMarkdownContent(text = '') {
-  return extractMeaningfulMarkdownLines(text).length > 0;
-}
 
-function extractMeaningfulMarkdownLines(text = '') {
-  return String(text || '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .split(/\r?\n/)
-    .map((line) => line.replace(/^\s*#+\s*/, '').replace(/^\s*[-*]\s+\[(?: |x)\]\s*/, '').replace(/^\s*[-*]\s+/, '').trim())
-    .filter((line) => line && !/^(agents|soul|tools|identity|user|heartbeat|boot|bootstrap|memory)$/i.test(line));
-}
 
 function refreshWorkspaceState() {
   workspaceState = {
@@ -1269,48 +1287,7 @@ function consumeStartupBootPrompt() {
   }
 }
 
-function buildWorkspaceProjectContextPrompt(fileNames, options = {}) {
-  const {
-    title = 'PROJECT_CONTEXT',
-    includeMissingMarkers = false,
-    perFileMaxChars = WORKSPACE_FILE_MAX_CHARS,
-    totalMaxChars = WORKSPACE_TOTAL_MAX_CHARS,
-  } = options;
-  let remaining = totalMaxChars;
-  const sections = [];
 
-  for (const fileName of fileNames) {
-    if (!fileName || remaining <= 0) {
-      break;
-    }
-
-    const filePath = getWorkspaceFilePath(fileName);
-    if (!fs.existsSync(filePath)) {
-      if (includeMissingMarkers) {
-        sections.push(`[${fileName}]\n[missing]`);
-      }
-      continue;
-    }
-
-    const raw = readTextFile(filePath, '').trim();
-    if (!raw) {
-      if (includeMissingMarkers) {
-        sections.push(`[${fileName}]\n[empty]`);
-      }
-      continue;
-    }
-
-    const content = truncatePromptText(raw, Math.min(perFileMaxChars, remaining));
-    if (!content) {
-      continue;
-    }
-
-    sections.push(`[${fileName}]\n${content}`);
-    remaining -= content.length;
-  }
-
-  return sections.length ? `${title}:\n${sections.join('\n\n')}` : '';
-}
 
 // updateBootstrapStateFromAcp, buildBootstrapAcpPrompt, buildPromptRecallBlock,
 // buildAutoRecallBlocks, buildCurrentSessionContextPrompt, buildSessionFlushSummary,
@@ -1564,20 +1541,7 @@ function runLocalChatCommand(text) {
   return null;
 }
 
-function buildRecentDailyMemoryPrompt(limit = 2) {
-  let remaining = Math.max(WORKSPACE_DAILY_NOTE_MAX_CHARS, limit * WORKSPACE_DAILY_NOTE_MAX_CHARS);
-  const sections = [];
-  for (const note of listRecentDailyMemoryNotes(limit)) {
-    if (remaining <= 0) break;
-    const raw = readTextFile(note.fullPath, '').trim();
-    if (!hasMeaningfulMarkdownContent(raw)) continue;
-    const content = truncatePromptText(raw, Math.min(WORKSPACE_DAILY_NOTE_MAX_CHARS, remaining));
-    if (!content) continue;
-    sections.push(`[${note.relativePath}]\n${content}`);
-    remaining -= content.length;
-  }
-  return sections.length ? `RECENT_DAILY_MEMORY:\n${sections.join('\n\n')}` : '';
-}
+
 
 // Bootstrap helpers (isBootstrapAnswerEmpty, getBootstrapMissingFieldIds,
 // getBootstrapInitialPrompt, buildBootstrapAnswersPrompt, updateBootstrapStateFromAcp)
@@ -1876,6 +1840,61 @@ function emitSystemChatStream(requestId, message) {
       requestId,
       role: 'system',
     },
+  });
+}
+
+function emitPhaseStreamEvent(requestId, phaseId, phaseKind, event = {}) {
+  emitChatStream({
+    ...(event && typeof event === 'object' ? event : {}),
+    type: String(event?.type || 'phase_status'),
+    requestId,
+    phaseId,
+    phaseKind,
+  });
+}
+
+async function emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, response) {
+  const phaseResponse = {
+    ...(response && typeof response === 'object' ? response : {}),
+    fallbackText: userText,
+  };
+  const assistantMessage = buildAssistantMessageFromResponse(requestId, phaseResponse, { phaseId, phaseKind });
+
+  appendHistoryMessage(assistantMessage);
+  emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
+    type: 'phase_message',
+    message: assistantMessage,
+  });
+
+  if (Array.isArray(phaseResponse.sequence) && phaseResponse.sequence.length) {
+    await playResponseSequence(requestId, phaseResponse);
+  }
+
+  return assistantMessage;
+}
+
+async function emitSpokenStatusUpdate(requestId, phaseId, text, options = {}) {
+  const response = buildStatusAssistantResponse(text, options);
+  if (!response) return null;
+
+  const phaseKind = options.phaseKind || 'status';
+  emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
+    type: 'phase_status',
+    message: {
+      id: createMessageId('system'),
+      requestId,
+      phaseId,
+      phaseKind,
+      role: 'system',
+      text: response.speech,
+      ts: new Date().toISOString(),
+    },
+  });
+
+  return emitIntermediateAssistantResponse(requestId, response.fallbackText || '', response, {
+    phaseId,
+    phaseKind,
+    messageMeta: { statusUpdate: true },
   });
 }
 
@@ -2507,8 +2526,7 @@ function closeCanvas() {
 
   return { ok: true, state: canvasState };
 }
-
-async function handleCanvasDirective(directive = {}) {
+async function handleCanvasDirective(directive) {
   if (!ENABLE_LIVE_CANVAS) {
     closeCanvas();
     return { ok: true, disabled: true, state: canvasState };
@@ -2537,8 +2555,7 @@ async function handleCanvasDirective(directive = {}) {
     content: directive.content || directive,
   });
 }
-
-async function handleBrowserDirective(directive = {}) {
+async function handleBrowserDirective(directive) {
   const action = String(directive.action || 'refresh').trim().toLowerCase();
 
   if (['open', 'show', 'navigate'].includes(action)) {
@@ -2564,437 +2581,10 @@ async function handleBrowserDirective(directive = {}) {
   }, canvasState, refreshBrowserCanvas);
 }
 
-function updateComputerState(patch = {}) {
-  computerState = {
-    ...computerState,
-    ...patch,
-    updatedAt: new Date().toISOString(),
-  };
-  broadcastStatus();
-}
 
-async function readComputerScreenshotText(targetPath) {
-  return readPywinautoDesktopStateText();
-}
 
-async function captureComputerScreenshotWithOcr(targetPath, region = '') {
-  const screenshot = await captureComputerScreenshot(targetPath, region);
-  const ocr = await readComputerScreenshotText(screenshot?.path || targetPath);
-  return {
-    ...screenshot,
-    ocrText: ocr.text,
-    ocrStatus: ocr.status,
-    ocrError: ocr.error,
-    readSource: ocr.source || 'ocr',
-  };
-}
 
-function buildComputerOcrNote(ocr = {}) {
-  if (ocr?.status === 'ready') {
-    return `Lettura desktop disponibile${ocr?.source ? ` via ${ocr.source}` : ''}.`;
-  }
 
-  if (ocr?.status === 'empty') {
-    return 'Nessun testo strutturato disponibile dal backend desktop.';
-  }
-
-  if (ocr?.status === 'error') {
-    return `Lettura desktop fallita: ${normalizeLine(ocr.error, 140)}`;
-  }
-
-  return '';
-}
-
-function getComputerForegroundRegion(state = computerState, padding = 10) {
-  const bounds = state?.foregroundBounds;
-  if (!bounds) {
-    return '';
-  }
-
-  const x = Number(bounds.x);
-  const y = Number(bounds.y);
-  const width = Number(bounds.width);
-  const height = Number(bounds.height);
-  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) {
-    return '';
-  }
-
-  const inset = Math.max(0, Math.round(Number(padding || 0)));
-  const nextX = Math.round(x + inset);
-  const nextY = Math.round(y + inset);
-  const nextWidth = Math.max(1, Math.round(width - (inset * 2)));
-  const nextHeight = Math.max(1, Math.round(height - (inset * 2)));
-  return `${nextX},${nextY},${nextWidth},${nextHeight}`;
-}
-
-function getComputerCaptureDir() {
-  const captureDir = path.join(app.getPath('userData'), 'computer-captures');
-  fs.mkdirSync(captureDir, { recursive: true });
-  return captureDir;
-}
-
-function buildComputerScreenshotRegionScript(region = '') {
-  const normalizedRegion = String(region || '').trim();
-  if (!normalizedRegion) {
-    return '[System.Windows.Forms.SystemInformation]::VirtualScreen';
-  }
-
-  const parts = normalizedRegion.split(',').map((part) => Number(part.trim()));
-  if (parts.length !== 4 || parts.some((value) => !Number.isFinite(value))) {
-    throw new Error('screenshot region deve essere x,y,width,height.');
-  }
-
-  return `New-Object System.Drawing.Rectangle(${Math.round(parts[0])}, ${Math.round(parts[1])}, ${Math.round(parts[2])}, ${Math.round(parts[3])})`;
-}
-
-async function captureComputerScreenshot(targetPath, region = '') {
-  const resolvedPath = String(targetPath || '').trim()
-    || path.join(getComputerCaptureDir(), `desktop-${Date.now()}.png`);
-  const regionScript = buildComputerScreenshotRegionScript(region);
-
-  return runPowerShellJson(`
-$ProgressPreference = 'SilentlyContinue'
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$targetPath = ${JSON.stringify(resolvedPath)}
-$bounds = ${regionScript}
-$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-$bitmap.Save($targetPath, [System.Drawing.Imaging.ImageFormat]::Png)
-$graphics.Dispose()
-$bitmap.Dispose()
-[pscustomobject]@{
-  ok = $true
-  path = $targetPath
-  width = $bounds.Width
-  height = $bounds.Height
-} | ConvertTo-Json -Compress
-`);
-}
-
-function buildComputerVerificationShotPath(actionSummary = '') {
-  const label = String(actionSummary || 'step')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32) || 'step';
-  return path.join(getComputerCaptureDir(), `verify-${Date.now()}-${label}.png`);
-}
-
-function buildPowerShellEncodedCommand(script = '') {
-  return Buffer.from(String(script || ''), 'utf16le').toString('base64');
-}
-
-function decodePowerShellCliXml(text = '') {
-  const source = String(text || '').trim();
-  if (!source) return '';
-
-  if (!source.includes('#< CLIXML')) {
-    return source;
-  }
-
-  const errorChunks = [...source.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)]
-    .map((match) => String(match[1] || ''))
-    .filter(Boolean);
-
-  const raw = errorChunks.length ? errorChunks.join(' ') : source;
-  return raw
-    .replace(/_x000D__x000A_/g, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/\s+\n/g, '\n')
-    .replace(/\n\s+/g, '\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
-
-function runPowerShellJson(script = '', options = {}) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('powershell.exe', [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-STA',
-      '-EncodedCommand',
-      buildPowerShellEncodedCommand(script),
-    ], {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-    const timeoutMs = Math.max(1000, Number(options.timeoutMs || COMPUTER_ACTION_TIMEOUT_MS));
-    const timer = setTimeout(() => {
-      try {
-        proc.kill();
-      } catch {
-        // ignore timeout kill errors
-      }
-    }, timeoutMs);
-
-    proc.stdout.on('data', (chunk) => {
-      stdout += String(chunk || '');
-    });
-    proc.stderr.on('data', (chunk) => {
-      stderr += String(chunk || '');
-    });
-    proc.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    proc.on('exit', (code) => {
-      clearTimeout(timer);
-      const output = String(stdout || '').trim();
-      if (code !== 0) {
-        reject(new Error(decodePowerShellCliXml(String(stderr || output || `PowerShell exited with code ${code}`))));
-        return;
-      }
-
-      if (!output) {
-        resolve({});
-        return;
-      }
-
-      try {
-        resolve(JSON.parse(output));
-      } catch {
-        reject(new Error(`Invalid PowerShell JSON output: ${output}`));
-      }
-    });
-  });
-}
-
-function buildComputerPowerShellPrelude() {
-  return `
-$ProgressPreference = 'SilentlyContinue'
-$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -TypeDefinition @"
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-
-public struct POINT {
-  public int X;
-  public int Y;
-}
-
-public struct RECT {
-  public int Left;
-  public int Top;
-  public int Right;
-  public int Bottom;
-}
-
-public class NyxComputerWin32 {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-  [DllImport("user32.dll")]
-  public static extern bool SetCursorPos(int X, int Y);
-
-  [DllImport("user32.dll")]
-  public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-
-  [DllImport("user32.dll")]
-  public static extern bool GetCursorPos(out POINT lpPoint);
-
-  [DllImport("user32.dll")]
-  public static extern int GetSystemMetrics(int nIndex);
-
-  [DllImport("user32.dll")]
-  public static extern IntPtr GetForegroundWindow();
-
-  [DllImport("user32.dll")]
-  public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-
-  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-  public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
-
-  [DllImport("user32.dll")]
-  public static extern bool IsWindowVisible(IntPtr hWnd);
-
-  [DllImport("user32.dll")]
-  public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-
-  [DllImport("user32.dll")]
-  public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-  [DllImport("user32.dll")]
-  public static extern bool SetForegroundWindow(IntPtr hWnd);
-
-  [DllImport("user32.dll")]
-  public static extern bool BringWindowToTop(IntPtr hWnd);
-
-  [DllImport("user32.dll")]
-  public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-}
-"@
-`;
-}
-
-function buildComputerWindowsStateScript(limit = 10) {
-  return `
-${buildComputerPowerShellPrelude()}
-$foreground = [NyxComputerWin32]::GetForegroundWindow()
-$foregroundTitle = ''
-$foregroundProcess = ''
-$foregroundBounds = $null
-$windows = New-Object System.Collections.Generic.List[object]
-[NyxComputerWin32]::EnumWindows({
-  param([IntPtr] $hwnd, [IntPtr] $lParam)
-  if (-not [NyxComputerWin32]::IsWindowVisible($hwnd)) { return $true }
-  $builder = New-Object System.Text.StringBuilder 512
-  [void][NyxComputerWin32]::GetWindowText($hwnd, $builder, $builder.Capacity)
-  $title = $builder.ToString().Trim()
-  if (-not $title) { return $true }
-[uint32] $procId = 0
-[void][NyxComputerWin32]::GetWindowThreadProcessId($hwnd, [ref] $procId)
-$processName = ''
-try {
-  $processName = (Get-Process -Id $procId -ErrorAction Stop).ProcessName
-} catch {
-  $processName = ''
-}
-  if ($hwnd -eq $foreground) {
-    $script:foregroundTitle = $title
-    $script:foregroundProcess = $processName
-    $rect = New-Object RECT
-    if ([NyxComputerWin32]::GetWindowRect($hwnd, [ref] $rect)) {
-      $width = [Math]::Max(0, $rect.Right - $rect.Left)
-      $height = [Math]::Max(0, $rect.Bottom - $rect.Top)
-      if ($width -gt 0 -and $height -gt 0) {
-        $script:foregroundBounds = [pscustomobject]@{
-          x = $rect.Left
-          y = $rect.Top
-          width = $width
-          height = $height
-        }
-      }
-    }
-  }
-  $windows.Add([pscustomobject]@{
-    title = $title
-    process = $processName
-    pid = [int] $procId
-  })
-  return $true
-}, [IntPtr]::Zero) | Out-Null
-$point = New-Object POINT
-[void][NyxComputerWin32]::GetCursorPos([ref] $point)
-[pscustomobject]@{
-  ok = $true
-  foregroundTitle = $foregroundTitle
-  foregroundProcess = $foregroundProcess
-  foregroundBounds = $foregroundBounds
-  cursorX = $point.X
-  cursorY = $point.Y
-  windows = @($windows | Select-Object -First ${Math.max(1, Math.min(20, limit))})
-} | ConvertTo-Json -Depth 5 -Compress
-`;
-}
-
-async function refreshComputerState() {
-  if (process.platform !== 'win32') {
-    updateComputerState({
-      supported: false,
-      error: 'computer_use supportato solo su Windows.',
-    });
-    return computerState;
-  }
-
-  try {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const cursor = screen.getCursorScreenPoint();
-    const state = await runPowerShellJson(buildComputerWindowsStateScript(12));
-    const pywinautoDetails = await ccReadPywinautoActiveWindowDetails(String(state?.foregroundTitle || '').trim());
-    updateComputerState({
-      supported: true,
-      width: Number(primaryDisplay?.size?.width || 0),
-      height: Number(primaryDisplay?.size?.height || 0),
-      cursorX: Number(state?.cursorX ?? cursor.x ?? 0),
-      cursorY: Number(state?.cursorY ?? cursor.y ?? 0),
-      foregroundTitle: String(state?.foregroundTitle || '').trim(),
-      foregroundProcess: String(state?.foregroundProcess || '').trim(),
-      foregroundHandle: Number.isFinite(Number(pywinautoDetails.handle)) ? Number(pywinautoDetails.handle) : null,
-      foregroundBounds: state?.foregroundBounds && Number.isFinite(Number(state.foregroundBounds.width)) && Number.isFinite(Number(state.foregroundBounds.height))
-        ? {
-          x: Number(state.foregroundBounds.x || 0),
-          y: Number(state.foregroundBounds.y || 0),
-          width: Number(state.foregroundBounds.width || 0),
-          height: Number(state.foregroundBounds.height || 0),
-        }
-        : null,
-      windows: Array.isArray(state?.windows) ? state.windows.slice(0, 12) : [],
-      interactiveElements: Array.isArray(pywinautoDetails.interactiveElements) ? pywinautoDetails.interactiveElements : [],
-      error: '',
-    });
-  } catch (error) {
-    updateComputerState({
-      supported: true,
-      error: error?.message || String(error),
-    });
-  }
-
-  return computerState;
-}
-
-function buildComputerStatePrompt() {
-  if (!computerState.supported) {
-    return 'ACTIVE_COMPUTER:\nSUPPORTED: no';
-  }
-
-  const windowLines = (computerState.windows || [])
-    .slice(0, 10)
-    .map((item) => `- ${normalizeLine(item.title, 80)}${item.process ? ` | ${item.process}` : ''}`)
-    .join('\n');
-  const foregroundBounds = computerState.foregroundBounds
-    && Number.isFinite(Number(computerState.foregroundBounds.width))
-    && Number.isFinite(Number(computerState.foregroundBounds.height))
-    ? `${Math.round(Number(computerState.foregroundBounds.x || 0))},${Math.round(Number(computerState.foregroundBounds.y || 0))},${Math.round(Number(computerState.foregroundBounds.width || 0))},${Math.round(Number(computerState.foregroundBounds.height || 0))}`
-    : '';
-  const interactiveElementLines = (computerState.interactiveElements || [])
-    .slice(0, 12)
-    .map((item) => {
-      const parts = [
-        `controlId=${item.controlId}`,
-        item.elementType || '',
-        item.title ? `"${normalizeLine(item.title, 48)}"` : '',
-        item.autoId ? `autoId=${normalizeLine(item.autoId, 32)}` : '',
-        item.className ? `class=${normalizeLine(item.className, 24)}` : '',
-      ].filter(Boolean);
-      return `- ${parts.join(' | ')}`;
-    })
-    .join('\n');
-
-  return [
-    'ACTIVE_COMPUTER:',
-    'SUPPORTED: yes',
-    `DESKTOP_BACKEND: ${computerState.desktopBackend || 'native'}`,
-    `PRIMARY_SCREEN: ${computerState.width || 0}x${computerState.height || 0}`,
-    `CURSOR: ${computerState.cursorX || 0},${computerState.cursorY || 0}`,
-    `FOREGROUND_WINDOW: ${computerState.foregroundTitle || '-'}`,
-    computerState.foregroundProcess ? `FOREGROUND_PROCESS: ${computerState.foregroundProcess}` : '',
-    Number.isFinite(Number(computerState.foregroundHandle)) ? `FOREGROUND_HANDLE: ${computerState.foregroundHandle}` : '',
-    foregroundBounds ? `FOREGROUND_BOUNDS: ${foregroundBounds}` : '',
-    windowLines ? `VISIBLE_WINDOWS:\n${windowLines}` : 'VISIBLE_WINDOWS:\n- none',
-    interactiveElementLines ? `INTERACTIVE_ELEMENTS:\n${interactiveElementLines}` : '',
-    computerState.lastAction ? `LAST_ACTION: ${computerState.lastAction}` : '',
-    computerState.lastResult ? `LAST_RESULT: ${normalizeLine(computerState.lastResult, 220)}` : '',
-    computerState.lastScreenshotPath ? `LAST_SCREENSHOT: ${computerState.lastScreenshotPath}` : '',
-    computerState.lastReadSource ? `LAST_READ_SOURCE: ${computerState.lastReadSource}` : '',
-    `OCR_STATUS: ${computerState.ocrStatus || 'idle'}`,
-    computerState.lastScreenshotText ? `LAST_SCREENSHOT_TEXT:\n${computerState.lastScreenshotText}` : '',
-    computerState.error ? `ERROR: ${normalizeLine(computerState.error, 220)}` : '',
-  ].filter(Boolean).join('\n');
-}
 
 function getComputerObservationSnapshot(state = computerState) {
   return {
@@ -3708,102 +3298,6 @@ if ($args.Count -gt 0) {
   return { ok: false, error: `Azione computer non supportata: ${action}` };
 }
 
-async function handleComputerDirective(directive = {}) {
-  const requestId = directive?.requestId || null;
-  const actionSummary = summarizeComputerDirective(directive);
-  const action = String(directive?.action || directive?.kind || '').trim().toLowerCase();
-  const beforeObservation = getComputerObservationSnapshot();
-  updateComputerState({
-    active: true,
-    phase: 'acting',
-    requestId,
-    currentAction: actionSummary,
-    error: '',
-  });
-
-  try {
-    const result = await performComputerAction(directive);
-    if (result?.ok === false) {
-      updateComputerState({
-        active: false,
-        phase: 'error',
-        requestId,
-        currentAction: actionSummary,
-        error: result.error || 'Errore computer_use',
-      });
-      return result;
-    }
-
-    const semanticResult = action === 'screenshot'
-      ? computerState.lastResult
-      : summarizeComputerActionResult(action, directive, result, beforeObservation, computerState);
-
-    if (action !== 'screenshot') {
-      updateComputerState({
-        active: true,
-        phase: 'verifying',
-        requestId,
-        currentAction: `${actionSummary} | screenshot + ocr check`,
-        ocrStatus: 'reading',
-      });
-
-      let verificationShot;
-      try {
-        verificationShot = await captureComputerScreenshotWithOcr(
-          buildComputerVerificationShotPath(actionSummary),
-          getComputerForegroundRegion(),
-        );
-      } catch (error) {
-        updateComputerState({
-          active: false,
-          phase: 'error',
-          requestId,
-          currentAction: actionSummary,
-          error: `Verifica screenshot fallita: ${error?.message || String(error)}`,
-        });
-        return {
-          ok: false,
-          error: `Verifica screenshot fallita: ${error?.message || String(error)}`,
-        };
-      }
-
-      updateComputerState({
-        lastScreenshotPath: String(verificationShot?.path || ''),
-        lastScreenshotText: String(verificationShot?.ocrText || ''),
-        lastReadSource: String(verificationShot?.readSource || ''),
-        desktopBackend: String(verificationShot?.readSource || '').includes('pywinauto') ? 'pywinauto-mcp' : computerState.desktopBackend,
-        ocrStatus: String(verificationShot?.ocrStatus || 'idle'),
-        lastResult: semanticResult
-          ? `${semanticResult} Screenshot catturato per verifica. ${buildComputerOcrNote(verificationShot)}`.trim()
-          : `Screenshot catturato per verifica. ${buildComputerOcrNote(verificationShot)}`.trim(),
-        error: '',
-      });
-    } else {
-      updateComputerState({
-        lastResult: semanticResult,
-      });
-    }
-
-    updateComputerState({
-      active: false,
-      phase: 'idle',
-      requestId,
-      currentAction: '',
-      error: '',
-    });
-    return result;
-  } catch (error) {
-    updateComputerState({
-      active: false,
-      phase: 'error',
-      requestId,
-      currentAction: actionSummary,
-      error: error?.message || String(error),
-    });
-    throw error;
-  }
-}
-
 async function maybeCompleteComputerFileSaveFlow(userText, typedTextBuffer = '') {
   const saveTarget = inferRequestedFileSaveTarget(userText);
   if (!saveTarget) {
@@ -4054,26 +3548,6 @@ function isTtsUnavailableError(error) {
   );
 }
 
-async function synthesizeSpeechToBase64(text) {
-  const safeText = String(text || '').trim();
-  if (!safeText) return null;
-
-  try {
-    const audioBase64 = await ttsService.synthesize(safeText);
-    ttsServiceLogTail = ttsService.getLogTail();
-    return audioBase64;
-  } catch (error) {
-    if (isTtsUnavailableError(error)) {
-      setTtsState('idle', {
-        error: null,
-        latencyMs: null,
-      });
-      return null;
-    }
-    ttsServiceLogTail = ttsService.getLogTail();
-    throw error;
-  }
-}
 
 function normalizeEmotion(value, fallback = 'neutral') {
   const emotion = String(value || '').trim().toLowerCase();
@@ -4485,11 +3959,11 @@ const EMOTION_TO_AVATAR_STYLE = {
   happy: { mood: 'happy', expression: 'happy', motion: null, motionType: null },
   sad: { mood: 'sad', expression: 'sad', motion: 'sitting', motionType: 'pose' },
   angry: { mood: 'angry', expression: 'angry', motion: 'side', motionType: 'pose' },
-  think: { mood: 'neutral', expression: 'think', motion: null, motionType: null },
-  surprised: { mood: 'happy', expression: 'surprised', motion: 'handup', motionType: 'gesture' },
+  think: { mood: 'think', expression: 'think', motion: null, motionType: null },
+  surprised: { mood: 'surprised', expression: 'surprised', motion: 'surprised_hands', motionType: 'gesture' },
   awkward: { mood: 'neutral', expression: 'neutral', motion: null, motionType: null },
-  question: { mood: 'neutral', expression: 'think', motion: 'shrug', motionType: 'gesture' },
-  curious: { mood: 'neutral', expression: 'think', motion: null, motionType: null },
+  question: { mood: 'curious', expression: 'think', motion: null, motionType: null },
+  curious: { mood: 'curious', expression: 'curious', motion: null, motionType: null },
   neutral: { mood: 'neutral', expression: 'neutral', motion: null, motionType: null },
   fear: { mood: 'fear', expression: 'fear', motion: 'side', motionType: 'pose' },
   disgust: { mood: 'disgust', expression: 'disgust', motion: 'side', motionType: 'pose' },
@@ -4832,52 +4306,11 @@ function getToolAvailability(type, directive = {}) {
   }
 }
 
-function partitionAvailableToolCalls(toolCalls = []) {
-  const available = [];
-  const blocked = [];
-
-  for (const call of Array.isArray(toolCalls) ? toolCalls : []) {
-    const availability = getToolAvailability(call?.type, call?.directive || {});
-    if (availability.available) {
-      available.push(call);
-    } else {
-      blocked.push({
-        type: call?.type || 'unknown',
-        directive: call?.directive || {},
-        ok: false,
-        error: availability.reason || 'Tool non disponibile.',
-      });
-    }
-  }
-
-  return { available, blocked };
-}
 
 function hasCanvasDirective(sequence = []) {
   return Array.isArray(sequence) && sequence.some((item) => item?.type === 'canvas');
 }
 
-function buildBrowserStatePrompt() {
-  if (canvasState.content?.type !== 'browser') {
-    return '';
-  }
-
-  const browser = canvasState.content;
-  const refLines = (browser.snapshotItems || [])
-    .slice(0, 20)
-    .map((item) => `- ${item.ref || 'node'} | ${item.role || 'node'} | ${normalizeLine(item.label, 140)}`)
-    .join('\n');
-
-  return [
-    'ACTIVE_BROWSER:',
-    browser.tabId ? `TAB_ID: ${browser.tabId}` : '',
-    `URL: ${browser.currentUrl || browser.url || ''}`,
-    `TITLE: ${browser.pageTitle || browser.title || 'Browser'}`,
-    `STATUS: ${browser.status || 'idle'}`,
-    browser.text ? `TEXT_PREVIEW: ${normalizeLine(browser.text, 700)}` : '',
-    refLines ? `INTERACTIVE_REFS:\n${refLines}` : 'INTERACTIVE_REFS:\n- none',
-  ].filter(Boolean).join('\n');
-}
 
 function extractRequestedWordCount(text) {
   const match = String(text || '').match(/(\d{1,4})\s*(?:parole|words?)/i);
@@ -5115,40 +4548,7 @@ function inferCanvasDirectiveFromUserInput(userText, responseSpeech, sequence = 
   };
 }
 
-function applyWorkspaceUpdate(directive = {}) {
-  const fileName = String(directive.file || '').trim();
-  if (!WORKSPACE_MUTABLE_FILES.includes(fileName)) {
-    return { ok: false, error: 'Workspace update non consentito per questo file.' };
-  }
 
-  const filePath = getWorkspaceFilePath(fileName);
-  const content = normalizeSpeechText(String(directive.content || ''));
-  if (!content) {
-    return { ok: false, error: 'Workspace update senza contenuto.' };
-  }
-
-  const current = readTextFile(filePath, '');
-  if (current.includes(content)) {
-    refreshWorkspaceState();
-    broadcastStatus();
-    return { ok: true, skipped: true, file: fileName, path: filePath };
-  }
-
-  const mode = String(directive.mode || 'append').trim().toLowerCase();
-  let nextText = current;
-
-  if (mode === 'replace') {
-    nextText = content.endsWith('\n') ? content : `${content}\n`;
-  } else {
-    const prefix = current.trim() ? '\n\n' : '';
-    nextText = `${current.trimEnd()}${prefix}${buildWorkspaceUpdateBlock(directive)}`.trimEnd() + '\n';
-  }
-
-  writeTextFile(filePath, nextText);
-  refreshWorkspaceState();
-  broadcastStatus();
-  return { ok: true, file: fileName, path: filePath };
-}
 
 
 
@@ -5197,30 +4597,9 @@ function isLikelyComputerTask(userText) {
   if (!input) return false;
 
   const nativeKeywords = [
-    'blocco note',
-    'notepad',
-    'calc',
-    'calcolatrice',
-    'paint',
-    'powershell',
-    'cmd',
-    'terminale',
-    'esplora file',
-    'file explorer',
-    'desktop',
-    'finestra',
-    'finestre',
-    'applicazione',
-    'programma',
-    'scrivi',
-    'digita',
-    'premi',
-    'tasto',
-    'hotkey',
-    'mouse',
-    'clic destro',
-    'clic sinistro',
-    '.exe',
+    'blocco note', 'notepad', 'calc', 'calcolatrice', 'paint', 'powershell', 'cmd', 'terminale',
+    'esplora file', 'file explorer', 'desktop', 'finestra', 'finestre', 'applicazione', 'programma',
+    'scrivi', 'digita', 'premi', 'tasto', 'hotkey', 'mouse', 'clic destro', 'clic sinistro', '.exe'
   ];
 
   return nativeKeywords.some((keyword) => input.includes(keyword));
@@ -5239,963 +4618,33 @@ function isRequestCancelled(requestId) {
   return !activeChatRequest || activeChatRequest.id !== requestId || Boolean(activeChatRequest.cancelled);
 }
 
-function buildActState(input, fallbackText = '') {
-  const fallback = inferAvatarReaction(fallbackText);
-  const emotion = normalizeEmotion(input?.emotion, fallback.emotion);
-  const defaults = EMOTION_TO_AVATAR_STYLE[emotion] || EMOTION_TO_AVATAR_STYLE.neutral;
-  const expression = normalizeExpression(input?.expression, defaults.expression || emotion);
-  const explicitMotion = extractExplicitMotion(input);
-  const fallbackMotion = extractExplicitMotion({ motion: fallback.motion, motionType: fallback.motionType });
-  const defaultMotion = extractExplicitMotion({ motion: defaults.motion, motionType: defaults.motionType });
-  const hasResolvedMotion = explicitMotion.pose || explicitMotion.animation || explicitMotion.gesture || explicitMotion.motion;
-  const selectedMotion = (explicitMotion.motionSpecified && hasResolvedMotion)
-    ? explicitMotion
-    : (fallbackMotion.motion ? fallbackMotion : defaultMotion);
-  const intensity = clampIntensity(input?.intensity, fallback.intensity);
-  const pose = selectedMotion.pose || null;
-  const animation = selectedMotion.animation || null;
-  const gesture = selectedMotion.gesture || null;
-  const motion = gesture || animation || pose || selectedMotion.motion || null;
-  const motionType = gesture
-    ? 'gesture'
-    : animation
-      ? 'animation'
-      : pose
-        ? 'pose'
-        : selectedMotion.motionType;
-
-  return {
-    emotion,
-    mood: defaults.mood || 'neutral',
-    expression,
-    pose,
-    animation,
-    gesture,
-    gestureHand: selectedMotion.gestureHand || null,
-    direction: selectedMotion.direction || null,
-    motion,
-    motionType,
-    intensity,
-  };
-}
-
-function buildAvatarAnimationPlan(style, segmentText = '') {
-  const merged = buildActState(style, segmentText);
-  const effectiveMotion = merged.motion === 'turnwalk' ? 'walking' : merged.motion;
-  const effectiveMotionType = merged.motion === 'turnwalk' ? 'animation' : merged.motionType;
-  const baseDurationMap = {
-    handup: 4,
-    ok: 3,
-    index: 4,
-    thumbup: 4,
-    thumbdown: 4,
-    side: 4,
-    shrug: 4,
-    namaste: 5,
-    dance: 12,
-    walking: 10,
-    turnwalk: 2,
-    sitting: 999999,
-    kneel: 999999,
-    oneknee: 999999,
-    bend: 999999,
-    straight: 6,
-  };
-
-  const motionDuration = Math.max(3, Math.round((baseDurationMap[effectiveMotion] || 4) * (0.7 + merged.intensity)));
-  const shouldResetMotion = Boolean(effectiveMotion) && effectiveMotionType === 'gesture';
-
-  return {
-    ...merged,
-    motion: effectiveMotion,
-    motionType: effectiveMotionType,
-    motionDuration,
-    shouldResetMotion,
-    resetMotion: shouldResetMotion ? 'straight' : null,
-    resetMotionType: shouldResetMotion ? 'pose' : null,
-  };
-}
-
-function parseReasoningSegments(raw) {
-  const segments = [];
-  for (const tagName of REASONING_TAG_NAMES) {
-    const regex = new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`, 'gi');
-    let match = regex.exec(raw);
-    while (match) {
-      segments.push(match[1].trim());
-      match = regex.exec(raw);
-    }
-  }
-  return segments.filter(Boolean);
-}
-
-function stripTrailingIncompleteControls(raw) {
-  let output = String(raw || '');
-  output = output.replace(/<\|[^|>]*$/g, '');
-
-  for (const tagName of REASONING_TAG_NAMES) {
-    const incompleteTag = new RegExp(`<${tagName}(?:[^>]*)>(?![\\s\\S]*?</${tagName}>)`, 'i');
-    const match = output.match(incompleteTag);
-    if (match?.index != null) {
-      output = output.slice(0, match.index);
-    }
-  }
-
-  return output;
-}
-
-function extractSpeechPreview(raw) {
-  let preview = stripTrailingIncompleteControls(String(raw || ''));
-  preview = preview.replace(/<\|ACT[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|CANVAS[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|BROWSER[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|WORKSPACE[\s\S]*?\|>/gi, '');
-  preview = preview.replace(/<\|DELAY:\s*\d+(?:\.\d+)?\|>/gi, '');
-
-  for (const tagName of REASONING_TAG_NAMES) {
-    const regex = new RegExp(`<${tagName}>[\\s\\S]*?</${tagName}>`, 'gi');
-    preview = preview.replace(regex, '');
-  }
-
-  return normalizeSpeechText(preview);
-}
-
-function parseJsonToolCalls(text) {
-  const raw = String(text || '');
-  const sanitizedRaw = sanitizeModelJsonEnvelope(raw);
-  const extractSegmentsFromJsonEnvelope = (json) => {
-    const nextSegments = [];
-    const segmentList = Array.isArray(json?.segments)
-      ? json.segments
-      : Array.isArray(json?.timeline)
-        ? json.timeline
-        : Array.isArray(json?.steps)
-          ? json.steps
-          : null;
-    const pushSpeech = (value) => {
-      const textValue = normalizeSpeechText(value);
-      if (textValue) nextSegments.push({ type: 'speech', text: textValue });
-    };
-    const pushTool = (toolName, argsValue) => {
-      if (!toolName || argsValue === undefined) return;
-      nextSegments.push({
-        type: 'tool',
-        tool: {
-          tool: String(toolName || '').trim(),
-          args: argsValue && typeof argsValue === 'object' ? argsValue : {},
-        },
-      });
-    };
-    const pushAvatar = (segment) => {
-      if (!segment || typeof segment !== 'object') return;
-      nextSegments.push({
-        type: 'avatar',
-        state: {
-          emotion: segment.emotion,
-          gesture: segment.gesture,
-          hand: segment.hand,
-          gestureHand: segment.gestureHand,
-          side: segment.side,
-          gestureSide: segment.gestureSide,
-          direction: segment.direction,
-          pose: segment.pose,
-          animation: segment.animation,
-          motion: segment.motion,
-          motionType: segment.motionType,
-          expression: segment.expression,
-          intensity: segment.intensity,
-          cognitive: segment.cognitive,
-          intent: segment.intent,
-          actions: segment.actions,
-        },
-      });
-    };
-
-    if (json && typeof json === 'object' && Array.isArray(segmentList)) {
-      for (const segment of segmentList) {
-        if (!segment || typeof segment !== 'object') continue;
-        if (segment.type === 'speech') {
-          pushSpeech(segment.text);
-          continue;
-        }
-        if (segment.type === 'avatar') {
-          pushAvatar(segment);
-          continue;
-        }
-        if (segment.type === 'tool' || segment.type === 'action') {
-          pushTool(segment.tool, segment.args);
-          continue;
-        }
-      }
-      return nextSegments;
-    }
-
-    if (json && typeof json === 'object') {
-      const preSpeech = json.preActionSpeech ?? json.pre_action_speech;
-      const postSpeech = json.postActionSpeech ?? json.post_action_speech;
-      const speech = json.speech ?? json.text ?? json.message;
-      if (preSpeech !== undefined) pushSpeech(preSpeech);
-      if (json.tool && json.args !== undefined) {
-        pushTool(json.tool, json.args);
-      } else if (Array.isArray(json.tools)) {
-        for (const toolItem of json.tools) {
-          if (!toolItem || typeof toolItem !== 'object') continue;
-          pushTool(toolItem.tool, toolItem.args);
-        }
-      }
-      if (postSpeech !== undefined) {
-        pushSpeech(postSpeech);
-      } else if (speech !== undefined) {
-        pushSpeech(speech);
-      }
-    }
-
-    return nextSegments;
-  };
-
-  const summarizeSegments = (segments) => {
-    const tools = [];
-    const speechParts = [];
-    const isActionSegment = (segment) => segment?.type === 'tool' || segment?.type === 'avatar';
-    for (const segment of segments) {
-      if (segment?.type === 'speech' && segment.text) {
-        speechParts.push(segment.text);
-      } else if (segment?.type === 'tool' && segment.tool) {
-        tools.push(segment.tool);
-      }
-    }
-    const speech = speechParts.join(' ').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
-    const firstToolIndex = segments.findIndex((segment) => isActionSegment(segment));
-    const preActionSpeech = segments
-      .slice(0, firstToolIndex >= 0 ? firstToolIndex : segments.length)
-      .filter((segment) => segment.type === 'speech')
-      .map((segment) => segment.text)
-      .join(' ')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/[ \t]{2,}/g, ' ')
-      .trim();
-    const postActionSpeech = (firstToolIndex >= 0 ? segments.slice(firstToolIndex + 1) : [])
-      .filter((segment) => segment.type === 'speech')
-      .map((segment) => segment.text)
-      .join(' ')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/[ \t]{2,}/g, ' ')
-      .trim();
-    return {
-      matchedJson: segments.length > 0,
-      tools,
-      speech,
-      segments,
-      preActionSpeech,
-      postActionSpeech,
-    };
-  };
-
-  const rootJsonResult = raw.startsWith('{') || raw.startsWith('[')
-    ? tryParseJsonAt(raw, 0)
-    : null;
-  if (rootJsonResult && rootJsonResult.endIndex === raw.length) {
-    const rootSegments = extractSegmentsFromJsonEnvelope(rootJsonResult.json);
-    if (rootSegments.length > 0) {
-      return summarizeSegments(rootSegments);
-    }
-  }
-
-  if (sanitizedRaw) {
-    const sanitizedRootResult = sanitizedRaw.startsWith('{') || sanitizedRaw.startsWith('[')
-      ? tryParseJsonAt(sanitizedRaw, 0)
-      : null;
-    if (sanitizedRootResult && sanitizedRootResult.endIndex === sanitizedRaw.length) {
-      const sanitizedSegments = extractSegmentsFromJsonEnvelope(sanitizedRootResult.json);
-      if (sanitizedSegments.length > 0) {
-        return summarizeSegments(sanitizedSegments);
-      }
-    }
-
-    const sanitizedLoose = parseLooseJsonObject(sanitizedRaw);
-    if (sanitizedLoose && typeof sanitizedLoose === 'object') {
-      const looseSegments = extractSegmentsFromJsonEnvelope(sanitizedLoose);
-      if (looseSegments.length > 0) {
-        return summarizeSegments(looseSegments);
-      }
-    }
-  }
-
-  const tools = [];
-  const speechParts = [];
-  const segments = [];
-  let lastIndex = 0;
-
-  for (let i = 0; i < raw.length; i++) {
-    if (raw[i] !== '{') continue;
-
-    // Try to find a complete JSON block starting at position i
-    const jsonResult = tryParseJsonAt(raw, i);
-    if (!jsonResult) continue;
-
-    const { json, endIndex } = jsonResult;
-
-    // Check if this JSON contains tool definitions
-    if (json && typeof json === 'object') {
-      const extractedTools = extractToolsFromJson(json);
-      if (extractedTools.length > 0) {
-        // Add speech before the JSON block
-        const beforeText = raw.slice(lastIndex, i).trim();
-        if (beforeText) {
-          speechParts.push(beforeText);
-          segments.push({ type: 'speech', text: beforeText });
-        }
-
-        tools.push(...extractedTools);
-        for (const extractedTool of extractedTools) {
-          segments.push({ type: 'tool', tool: extractedTool });
-        }
-        lastIndex = endIndex;
-        i = endIndex - 1;
-        continue;
-      }
-    }
-  }
-
-  // Add remaining text as speech
-  const afterText = raw.slice(lastIndex).trim();
-  if (afterText) {
-    speechParts.push(afterText);
-    segments.push({ type: 'speech', text: afterText });
-  }
-
-  return {
-    matchedJson: tools.length > 0,
-    tools,
-    speech: speechParts.join(' ').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim(),
-    segments,
-    preActionSpeech: segments
-      .slice(0, segments.findIndex((segment) => segment.type === 'tool') >= 0 ? segments.findIndex((segment) => segment.type === 'tool') : segments.length)
-      .filter((segment) => segment.type === 'speech')
-      .map((segment) => segment.text)
-      .join(' ')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/[ \t]{2,}/g, ' ')
-      .trim(),
-    postActionSpeech: (() => {
-      const firstToolIndex = segments.findIndex((segment) => segment.type === 'tool');
-      return (firstToolIndex >= 0 ? segments.slice(firstToolIndex + 1) : [])
-        .filter((segment) => segment.type === 'speech')
-        .map((segment) => segment.text)
-        .join(' ')
-        .replace(/\n{3,}/g, '\n\n')
-        .replace(/[ \t]{2,}/g, ' ')
-        .trim();
-    })(),
-  };
-}
-
-function tryParseJsonAt(text, startPos) {
-  let depth = 0;
-  let inString = false;
-  let escapeNext = false;
-
-  for (let i = startPos; i < text.length; i++) {
-    const char = text[i];
-
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-
-    if (char === '\\' && inString) {
-      escapeNext = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) continue;
-
-    if (char === '{' || char === '[') {
-      depth++;
-    } else if (char === '}' || char === ']') {
-      depth--;
-      if (depth === 0) {
-        // Found complete JSON block
-        const jsonStr = text.slice(startPos, i + 1);
-        try {
-          return { json: JSON.parse(jsonStr), endIndex: i + 1 };
-        } catch {
-          return null;
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function extractToolsFromJson(json) {
-  const tools = [];
-
-  if (json.tool && json.args !== undefined) {
-    tools.push({ tool: json.tool, args: json.args });
-  } else if (Array.isArray(json.segments)) {
-    for (const segment of json.segments) {
-      if (segment && typeof segment === 'object' && (segment.type === 'tool' || segment.type === 'action') && segment.tool && segment.args !== undefined) {
-        tools.push({ tool: segment.tool, args: segment.args });
-      }
-    }
-  } else if (json.tools && Array.isArray(json.tools)) {
-    for (const t of json.tools) {
-      if (t.tool && t.args !== undefined) {
-        tools.push({ tool: t.tool, args: t.args });
-      }
-    }
-  }
-
-  return tools;
-}
-
-function mapJsonToolToSequence(jsonTool) {
-  const { tool, args } = jsonTool;
-  if (!tool || !args || typeof args !== 'object') return null;
-
-  switch (tool) {
-    case 'read_file':
-      return { type: 'read_file', directive: { path: String(args.path || ''), startLine: args.startLine, endLine: args.endLine } };
-    case 'write_file':
-      return { type: 'write_file', directive: { path: String(args.path || ''), content: String(args.content || ''), overwrite: Boolean(args.overwrite) } };
-    case 'edit_file':
-      return { type: 'edit_file', directive: { path: String(args.path || ''), oldString: String(args.oldString || ''), newString: String(args.newString || ''), replaceAll: Boolean(args.replaceAll), regex: Boolean(args.regex) } };
-    case 'apply_patch':
-      return { type: 'apply_patch', directive: { path: String(args.path || ''), oldText: String(args.oldText || ''), newText: String(args.newText || ''), replaceAll: Boolean(args.replaceAll) } };
-    case 'shell':
-      return { type: 'shell', directive: { command: String(args.command || ''), cwd: args.cwd, timeout: args.timeout, background: Boolean(args.background) } };
-    case 'glob':
-      return { type: 'glob', directive: { pattern: String(args.pattern || ''), path: args.path } };
-    case 'grep':
-      return { type: 'grep', directive: { pattern: String(args.pattern || ''), path: args.path, include: args.include } };
-    case 'multi_file_read':
-      return { type: 'multi_file_read', directive: { files: Array.isArray(args.files) ? args.files : [] } };
-    case 'git':
-      return { type: 'git', directive: { action: String(args.action || 'status'), params: args.params || {}, cwd: args.cwd } };
-    case 'web_fetch':
-      return { type: 'web_fetch', directive: { url: String(args.url || ''), format: args.format } };
-    case 'web_search':
-      return { type: 'web_search', directive: { query: String(args.query || ''), numResults: args.numResults } };
-    case 'memory_search':
-      return { type: 'memory_search', directive: { query: String(args.query || ''), scope: String(args.scope || 'all') } };
-    case 'task':
-      return { type: 'task', directive: { action: String(args.action || 'list'), params: args.params || {} } };
-    case 'delay':
-      return { type: 'delay', seconds: Math.min(3, Math.max(0, Number(args.seconds) || 0)) };
-    case 'browser':
-      return { type: 'browser', directive: { action: String(args.action || ''), url: args.url, ref: args.ref, text: args.text, key: args.key, waitAfterMs: args.waitAfterMs } };
-    case 'computer':
-      return { type: 'computer', directive: { action: String(args.action || ''), titleContains: args.titleContains, app: args.app, text: args.text, combo: args.combo } };
-    case 'canvas':
-      return { type: 'canvas', directive: { action: String(args.action || ''), layout: args.layout, content: args.content } };
-    case 'workspace':
-      return { type: 'workspace', directive: { file: String(args.file || ''), mode: String(args.mode || 'append'), content: String(args.content || '') } };
-    default:
-      return null;
-  }
-}
-
-function buildParsedResponseFromJsonSegments(jsonSegments, raw, fallbackInput, reasoning = '', options = {}) {
-  const sequence = [];
-  let firstAvatarState = null;
-
-  for (const segment of Array.isArray(jsonSegments) ? jsonSegments : []) {
-    if (segment.type === 'speech') {
-      const text = normalizeSpeechText(segment.text);
-      if (text) {
-        sequence.push({ type: 'speech', text });
-      }
-      continue;
-    }
-
-    if (segment.type === 'avatar' && segment.state) {
-      const avatarState = parseActPayload(JSON.stringify(segment.state), fallbackInput);
-      if (avatarState) {
-        const item = { type: 'avatar', ...avatarState };
-        if (!firstAvatarState) firstAvatarState = item;
-        sequence.push(item);
-      }
-      continue;
-    }
-
-    if (segment.type !== 'tool' || !segment.tool) continue;
-    const item = mapJsonToolToSequence(segment.tool);
-    if (!item) continue;
-    sequence.push(item);
-  }
-
-  const speech = sequence
-    .filter((item) => item.type === 'speech' && item.text)
-    .map((item) => item.text)
-    .join(' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-
-  if (!firstAvatarState) {
-    const emojiEmotion = resolveEmotionFromEmoji(raw);
-    if (emojiEmotion) {
-      const style = EMOTION_TO_AVATAR_STYLE[emojiEmotion] || EMOTION_TO_AVATAR_STYLE.neutral;
-      firstAvatarState = {
-        type: 'avatar',
-        emotion: emojiEmotion,
-        intensity: 0.72,
-        pose: null,
-        animation: null,
-        gesture: style.motionType === 'gesture' ? style.motion : null,
-        gestureHand: null,
-        motion: style.motion,
-        motionType: style.motionType,
-        expression: style.expression,
-        motionSpecified: !!style.motion,
-      };
-      sequence.unshift(firstAvatarState);
-    }
-  }
-
-  return {
-    format: options.format || 'json',
-    raw,
-    speech,
-    preActionSpeech: normalizeSpeechText(options.preActionSpeech || ''),
-    postActionSpeech: normalizeSpeechText(options.postActionSpeech || ''),
-    reasoning,
-    sequence,
-    firstAvatarState,
-    firstActState: firstAvatarState,
-    fallbackText: fallbackInput,
-  };
-}
-
-function buildParsedResponseFromSequenceChunk(baseResponse, sequenceChunk = [], fallbackInput = '') {
-  const sequence = Array.isArray(sequenceChunk) ? sequenceChunk.filter(Boolean) : [];
-  const speech = sequence
-    .filter((item) => item.type === 'speech' && item.text)
-    .map((item) => item.text)
-    .join(' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-  const firstAvatarState = sequence.find((item) => item.type === 'avatar' || item.type === 'act') || null;
-
-  return {
-    ...(baseResponse || {}),
-    speech,
-    sequence,
-    firstAvatarState: firstAvatarState || baseResponse?.firstAvatarState || null,
-    firstActState: firstAvatarState || baseResponse?.firstActState || null,
-    fallbackText: fallbackInput || baseResponse?.fallbackText || '',
-  };
-}
-
-function normalizeLegacyResponseToPhasePlan(response, fallbackInput = '') {
-  const phases = [];
-  const sequence = Array.isArray(response?.sequence) ? response.sequence : [];
-  let currentMessageItems = [];
-  let currentToolItems = [];
-  let phaseCounter = 0;
-
-  const flushMessage = () => {
-    if (!currentMessageItems.length) return;
-    phaseCounter += 1;
-    phases.push({
-      phaseId: `phase-${phaseCounter}`,
-      kind: 'message',
-      response: buildParsedResponseFromSequenceChunk(response, currentMessageItems, fallbackInput),
-    });
-    currentMessageItems = [];
-  };
-
-  const flushTools = () => {
-    if (!currentToolItems.length) return;
-    phaseCounter += 1;
-    phases.push({
-      phaseId: `phase-${phaseCounter}`,
-      kind: 'tool_batch',
-      sequence: currentToolItems.slice(),
-    });
-    currentToolItems = [];
-  };
-
-  for (const item of sequence) {
-    const isMessageItem = ['speech', 'avatar', 'act', 'delay'].includes(item?.type);
-    if (isMessageItem) {
-      flushTools();
-      currentMessageItems.push(item);
-    } else {
-      flushMessage();
-      currentToolItems.push(item);
-    }
-  }
-
-  flushMessage();
-  flushTools();
-
-  if (!phases.length) {
-    phases.push({
-      phaseId: 'phase-1',
-      kind: 'final',
-      response: buildParsedResponseFromSequenceChunk(response, sequence, fallbackInput),
-    });
-  } else if (!phases.some((phase) => phase.kind === 'tool_batch')) {
-    phases[phases.length - 1].kind = 'final';
-  }
-
-  return {
-    format: 'legacy',
-    raw: response?.raw || '',
-    reasoning: response?.reasoning || '',
-    phases,
-    response,
-  };
-}
-
-function parsePhasePlan(rawOutput, fallbackInput, options = {}) {
-  const raw = String(rawOutput || '').replace(/\r/g, '').trim();
-  const reasoning = parseReasoningSegments(raw).join('\n\n');
-  const sanitizedRaw = sanitizeModelJsonEnvelope(raw);
-  const tryRootObject = (source) => {
-    if (!source) return null;
-    const direct = (source.startsWith('{') || source.startsWith('[')) ? tryParseJsonAt(source, 0) : null;
-    if (direct && direct.endIndex === source.length && direct.json && typeof direct.json === 'object' && !Array.isArray(direct.json)) {
-      return direct.json;
-    }
-    const loose = parseLooseJsonObject(source);
-    return loose && typeof loose === 'object' && !Array.isArray(loose) ? loose : null;
-  };
-
-  const root = tryRootObject(raw) || tryRootObject(sanitizedRaw);
-  if (!root || !Array.isArray(root.phases)) {
-    const response = parseInlineResponse(rawOutput, fallbackInput, options);
-    return normalizeLegacyResponseToPhasePlan(response, fallbackInput);
-  }
-
-  const phases = [];
-  root.phases.forEach((phase, index) => {
-    if (!phase || typeof phase !== 'object') return;
-    const kind = String(phase.kind || phase.type || 'message').trim().toLowerCase();
-    const phaseId = String(phase.phaseId || phase.id || `phase-${index + 1}`).trim() || `phase-${index + 1}`;
-
-    if (kind === 'status') {
-      const statusText = normalizeSpeechText(String(phase.text || phase.message || ''));
-      if (statusText) {
-        phases.push({
-          phaseId,
-          kind: 'status',
-          statusText,
-          speak: phase.speak === true || phase.tts === true || phase.voice === true,
-        });
-      }
-      return;
-    }
-
-    const segmentList = Array.isArray(phase.segments)
-      ? phase.segments
-      : Array.isArray(phase.timeline)
-        ? phase.timeline
-        : Array.isArray(phase.steps)
-          ? phase.steps
-          : [];
-
-    const parsedResponse = buildParsedResponseFromJsonSegments(
-      segmentList.map((segment) => {
-        if (!segment || typeof segment !== 'object') return null;
-        if (segment.type === 'avatar') {
-          return {
-            type: 'avatar',
-            state: {
-              emotion: segment.emotion,
-              gesture: segment.gesture,
-              hand: segment.hand,
-              gestureHand: segment.gestureHand,
-              side: segment.side,
-              gestureSide: segment.gestureSide,
-              direction: segment.direction,
-              pose: segment.pose,
-              animation: segment.animation,
-              motion: segment.motion,
-              motionType: segment.motionType,
-              expression: segment.expression,
-              intensity: segment.intensity,
-              cognitive: segment.cognitive,
-              intent: segment.intent,
-              actions: segment.actions,
-            },
-          };
-        }
-        if (segment.type === 'speech') return { type: 'speech', text: segment.text };
-        if (segment.type === 'tool' || segment.type === 'action') {
-          return { type: 'tool', tool: { tool: segment.tool, args: segment.args || {} } };
-        }
-        return null;
-      }).filter(Boolean),
-      raw,
-      fallbackInput,
-      reasoning,
-      { format: 'phases' }
-    );
-
-    if (kind === 'tool_batch') {
-      phases.push({
-        phaseId,
-        kind,
-        sequence: Array.isArray(parsedResponse.sequence) ? parsedResponse.sequence.filter((item) => item.type && item.type !== 'speech' && item.type !== 'avatar' && item.type !== 'act' && item.type !== 'delay') : [],
-      });
-      return;
-    }
-
-    if (kind === 'blocked') {
-      phases.push({ phaseId, kind, response: parsedResponse, shouldPause: true });
-      return;
-    }
-
-    if (kind === 'final') {
-      phases.push({ phaseId, kind: 'final', response: parsedResponse });
-      return;
-    }
-
-    phases.push({ phaseId, kind: 'message', response: parsedResponse });
-  });
-
-  if (!phases.length) {
-    const response = parseInlineResponse(rawOutput, fallbackInput, options);
-    return normalizeLegacyResponseToPhasePlan(response, fallbackInput);
-  }
-
-  return {
-    format: 'phases',
-    raw,
-    reasoning,
-    phases,
-  };
-}
-
-function parseInlineResponse(rawOutput, fallbackInput, options = {}) {
-  const raw = String(rawOutput || '').replace(/\r/g, '').trim();
-  const reasoning = parseReasoningSegments(raw).join('\n\n');
-
-  // JSON-only mode: no legacy token fallback
-  const {
-    matchedJson,
-    tools: jsonTools,
-    speech: jsonSpeech,
-    segments: jsonSegments,
-    preActionSpeech: jsonPreActionSpeech,
-    postActionSpeech: jsonPostActionSpeech,
-  } = parseJsonToolCalls(raw);
-
-  if (matchedJson) {
-    return buildParsedResponseFromJsonSegments(jsonSegments, raw, fallbackInput, reasoning, {
-      format: 'json',
-      preActionSpeech: jsonPreActionSpeech,
-      postActionSpeech: jsonPostActionSpeech,
-    });
-  }
-
-  // No JSON matched — treat entire response as speech
-  const speechText = normalizeSpeechText(
-    parseStructuredField(raw, 'ASSISTANT_TEXT') || raw
-  );
-
-  // Emoji-based emotion inference (no ACT tokens needed)
-  const emojiEmotion = resolveEmotionFromEmoji(raw);
-  const firstAvatarState = emojiEmotion
-    ? {
-        type: 'avatar',
-        emotion: emojiEmotion,
-        intensity: 0.72,
-        motion: EMOTION_TO_AVATAR_STYLE[emojiEmotion]?.motion || null,
-        motionType: EMOTION_TO_AVATAR_STYLE[emojiEmotion]?.motionType || null,
-        expression: EMOTION_TO_AVATAR_STYLE[emojiEmotion]?.expression || emojiEmotion,
-        motionSpecified: false,
-      }
-    : null;
-
-  return {
-    format: 'json',
-    raw,
-    speech: speechText,
-    reasoning,
-    sequence: [
-      ...(firstAvatarState ? [firstAvatarState] : []),
-      { type: 'speech', text: speechText },
-    ],
-    firstAvatarState,
-    firstActState: firstAvatarState,
-  };
-}
-
-function estimateSpeechDurationMs(text, audioBase64) {
-  try {
-    if (audioBase64) {
-      const wav = Buffer.from(audioBase64, 'base64');
-      if (wav.slice(0, 4).toString('ascii') === 'RIFF' && wav.slice(8, 12).toString('ascii') === 'WAVE' && wav.length > 44) {
-        const channels = wav.readUInt16LE(22);
-        const sampleRate = wav.readUInt32LE(24);
-        const bitsPerSample = wav.readUInt16LE(34);
-        const dataSize = wav.readUInt32LE(40);
-        const bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
-        if (bytesPerSecond > 0) {
-          return Math.max(600, Math.round((dataSize / bytesPerSecond) * 1000));
-        }
-      }
-    }
-  } catch {
-    // fallback below
-  }
-
-  return Math.max(1200, Math.min(String(text || '').length * 90, 15000));
-}
-
-async function waitWhileActive(requestId, ms) {
-  let remaining = Math.max(0, ms);
-  while (remaining > 0) {
-    if (activeResponseId !== requestId) {
-      return false;
-    }
-    const step = Math.min(remaining, 120);
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(step);
-    remaining -= step;
-  }
-
-  return activeResponseId === requestId;
-}
-
-async function playSequentialMoods(requestId, moods, speechText) {
-  const totalDuration = estimateSpeechDurationMs(speechText);
-  const intervalMs = Math.max(1500, totalDuration / moods.length);
-
-  for (let i = 0; i < moods.length; i++) {
-    if (activeResponseId !== requestId) return;
-    const mood = moods[i];
-    sendAvatarCommand({ cmd: 'mood', mood: mood.mood });
-    sendAvatarCommand({ cmd: 'expression', expression: mood.expression });
-    if (i < moods.length - 1) {
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(intervalMs);
-    }
-  }
-}
-
-async function playMultiActions(requestId, actions) {
-  for (const action of actions) {
-    if (activeResponseId !== requestId) return;
-    if (action.delay) {
-      // eslint-disable-next-line no-await-in-loop
-      await sleep(action.delay * 1000);
-    }
-    sendAvatarCommand({ cmd: 'expression', expression: action.expression || 'neutral' });
-    playAvatarMotions(action, 4);
-    if (action.emotion && action.emotion !== 'neutral') {
-      sendAvatarCommand({ cmd: 'mood', mood: action.emotion });
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(800);
-  }
-}
-
-function sanitizeModelJsonEnvelope(source) {
-  let text = String(source || '').trim();
-  if (!text) return '';
-
-  text = text.replace(/```(?:json)?/gi, '').trim();
-
-  const firstBrace = text.indexOf('{');
-  const lastBrace = text.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    text = text.slice(firstBrace, lastBrace + 1);
-  }
-
-  return text
-    .replace(/"type"\s*:\s*"tool"\s*:\s*"([^"]+)"/gi, '"type":"tool","tool":"$1"')
-    .replace(/"type"\s*:\s*"action"\s*:\s*"([^"]+)"/gi, '"type":"action","tool":"$1"')
-    .replace(/,\s*([}\]])/g, '$1')
-    .trim();
-}
-
-function playAvatarMotions(style, duration) {
-  if (!style) return;
-
-  if (style.pose) {
-    sendAvatarCommand({
-      cmd: 'motion',
-      motion: style.pose,
-      motionType: 'pose',
-      duration,
-    });
-  }
-
-  if (style.animation) {
-    sendAvatarCommand({
-      cmd: 'motion',
-      motion: style.animation,
-      motionType: 'animation',
-      duration,
-    });
-  }
-
-  if (style.gesture) {
-    sendAvatarCommand({
-      cmd: 'motion',
-      motion: style.gesture,
-      motionType: 'gesture',
-      duration,
-      hand: style.gestureHand || null,
-    });
-    return;
-  }
-
-  if (style.motion) {
-    sendAvatarCommand({
-      cmd: 'motion',
-      motion: style.motion,
-      motionType: style.motionType,
-      duration,
-      direction: style.direction || null,
-    });
-  }
-}
-
-async function settleAvatarMotion(requestId, style) {
-  if (!style) return true;
-  if (!style.pose && !style.animation) return true;
-  if (style.motion === 'turnwalk' || style.animation === 'turnwalk') {
-    return waitWhileActive(requestId, 1150);
-  }
-  return waitWhileActive(requestId, style.animation ? 260 : 180);
-}
+const playbackDeps = {
+  getActiveResponseId: () => activeResponseId,
+  sendAvatarCommand: (cmd) => sendAvatarCommand(cmd),
+};
 
 async function playResponseSequence(requestId, response) {
   activeResponseId = requestId;
   clearSpeechResetTimer();
-  sendAvatarCommand({ cmd: 'stop' });
 
-  let currentAct = buildActState(response.firstAvatarState || response.firstActState, response.fallbackText || response.speech);
+  let currentAct = playback.buildActState(response.firstAvatarState || response.firstActState, response.fallbackText || response.speech);
   const hasSpeechItems = Array.isArray(response.sequence)
     && response.sequence.some((item) => item.type === 'speech' && item.text);
 
   sendAvatarCommand({ cmd: 'expression', expression: currentAct.expression });
 
   if (!hasSpeechItems) {
-    playAvatarMotions(currentAct, 6);
-    if (!(await settleAvatarMotion(requestId, currentAct))) {
+    playback.playAvatarMotions(currentAct, 6, sendAvatarCommand);
+    if (!(await playback.settleAvatarMotion(requestId, currentAct, () => activeResponseId))) {
       return;
     }
 
     if (currentAct.sequentialMoods && currentAct.sequentialMoods.length) {
-      await playSequentialMoods(requestId, currentAct.sequentialMoods, response.speech);
+      await playback.playSequentialMoods(requestId, currentAct.sequentialMoods, response.speech, playbackDeps);
     }
 
     if (currentAct.multiAction && currentAct.actions && currentAct.actions.length) {
-      await playMultiActions(requestId, currentAct.actions);
+      await playback.playMultiActions(requestId, currentAct.actions, playbackDeps);
     }
   }
 
@@ -6215,34 +4664,30 @@ async function playResponseSequence(requestId, response) {
         skippedInitialAvatarState = true;
         continue;
       }
-      currentAct = buildActState(item, response.fallbackText || response.speech);
+      currentAct = playback.buildActState(item, response.fallbackText || response.speech);
       sendAvatarCommand({ cmd: 'expression', expression: currentAct.expression });
 
       if (currentAct.sequentialMoods && currentAct.sequentialMoods.length) {
-        // eslint-disable-next-line no-await-in-loop
-        await playSequentialMoods(requestId, currentAct.sequentialMoods, response.speech);
+        await playback.playSequentialMoods(requestId, currentAct.sequentialMoods, response.speech, playbackDeps);
       }
 
       if (currentAct.multiAction && currentAct.actions && currentAct.actions.length) {
-        // eslint-disable-next-line no-await-in-loop
-        await playMultiActions(requestId, currentAct.actions);
+        await playback.playMultiActions(requestId, currentAct.actions, playbackDeps);
       }
 
-      playAvatarMotions(currentAct, buildAvatarAnimationPlan(currentAct, response.speech).motionDuration);
-      if (!(await settleAvatarMotion(requestId, currentAct))) {
+      playback.playAvatarMotions(currentAct, playback.buildAvatarAnimationPlan(currentAct, response.speech).motionDuration, sendAvatarCommand);
+      if (!(await playback.settleAvatarMotion(requestId, currentAct, () => activeResponseId))) {
         return;
       }
       continue;
     }
 
     if (item.type === 'canvas') {
-      // eslint-disable-next-line no-await-in-loop
       await handleCanvasDirective(item.directive);
       continue;
     }
 
     if (item.type === 'browser') {
-      // eslint-disable-next-line no-await-in-loop
       const browserResult = await handleBrowserDirective(item.directive);
       if (browserResult?.ok === false) {
         throw new Error(browserResult.error || 'Errore browser PinchTab');
@@ -6251,7 +4696,6 @@ async function playResponseSequence(requestId, response) {
     }
 
     if (item.type === 'workspace') {
-      // eslint-disable-next-line no-await-in-loop
       const workspaceResult = applyWorkspaceUpdate(item.directive);
       if (workspaceResult?.ok === false) {
         throw new Error(workspaceResult.error || 'Errore aggiornamento workspace');
@@ -6265,16 +4709,11 @@ async function playResponseSequence(requestId, response) {
         typedTextBuffer = `${typedTextBuffer}${typedTextBuffer ? '\n' : ''}${item.directive.text}`;
       }
 
-      // eslint-disable-next-line no-await-in-loop
-      const computerResult = await handleComputerDirective({
-        ...item.directive,
-        requestId,
-      });
+      const computerResult = await handleComputerDirective({ ...item.directive, requestId });
       if (computerResult?.ok === false) {
         throw new Error(computerResult.error || 'Errore computer_use');
       }
 
-      // eslint-disable-next-line no-await-in-loop
       const saveFlowResult = await maybeCompleteComputerFileSaveFlow(response.fallbackText || response.speech || '', typedTextBuffer);
       if (saveFlowResult?.ok === false) {
         throw new Error(`Non sono riuscito a verificare il salvataggio del file in ${saveFlowResult.targetPath}`);
@@ -6283,8 +4722,7 @@ async function playResponseSequence(requestId, response) {
     }
 
     if (item.type === 'delay') {
-      // eslint-disable-next-line no-await-in-loop
-      const stillActive = await waitWhileActive(requestId, item.seconds * 1000);
+      const stillActive = await playback.waitWhileActive(requestId, item.seconds * 1000, () => activeResponseId);
       if (!stillActive) {
         return;
       }
@@ -6296,23 +4734,17 @@ async function playResponseSequence(requestId, response) {
     }
 
     speechSegmentsCount += 1;
+    const plan = playback.buildAvatarAnimationPlan(currentAct, item.text);
+    const audioBase64 = await ttsService.synthesize(item.text);
+    if (!audioBase64) continue;
 
-    const plan = buildAvatarAnimationPlan(currentAct, item.text);
-    // eslint-disable-next-line no-await-in-loop
-    const audioBase64 = await synthesizeSpeechToBase64(item.text);
-    if (!audioBase64) {
-      continue;
-    }
-
-    if (activeResponseId !== requestId) {
-      return;
-    }
+    if (activeResponseId !== requestId) return;
 
     const segmentId = `segment-${speechSegmentIndex += 1}`;
-    const expectedDurationMs = estimateSpeechDurationMs(item.text, audioBase64);
+    const expectedDurationMs = playback.estimateSpeechDurationMs(item.text, audioBase64);
     const playbackWait = waitForAvatarPlayback(requestId, segmentId, expectedDurationMs + 1500);
 
-    playAvatarMotions(plan, plan.motionDuration);
+    playback.playAvatarMotions(plan, plan.motionDuration, sendAvatarCommand);
     setStatus('speaking');
     setStreamStatus(STREAM_STATUS.SPEAKING);
     sendAvatarCommand({
@@ -6326,11 +4758,8 @@ async function playResponseSequence(requestId, response) {
       expectedDurationMs,
     });
 
-    // eslint-disable-next-line no-await-in-loop
     const stillActive = await playbackWait;
-    if (!stillActive) {
-      return;
-    }
+    if (!stillActive) return;
 
     if (plan.shouldResetMotion && plan.resetMotion) {
       sendAvatarCommand({
@@ -6349,7 +4778,6 @@ async function playResponseSequence(requestId, response) {
     setTtsState('idle', { error: null });
   }
 
-  // Update personality based on this interaction
   const lastUserMsg = chatHistory.filter((m) => m.role === 'user').slice(-1)[0];
   const lastAssistantMsg = chatHistory.filter((m) => m.role === 'assistant').slice(-1)[0];
   if (lastUserMsg && lastAssistantMsg) {
@@ -6358,11 +4786,10 @@ async function playResponseSequence(requestId, response) {
     savePersonality(personalityPath, personalityState);
   }
 
-  // Auto-prune if context is getting large
   const stats = getContextStats(chatHistory);
-  if (stats.usagePercent > 70) {
+  if (stats && stats.usagePercent > 70) {
     const pruneResult = smartPrune(chatHistory);
-    if (pruneResult.action !== 'none') {
+    if (pruneResult && pruneResult.action !== 'none') {
       emitSystemChatStream(requestId, `Context pruned: ${pruneResult.pruned} messaggi rimossi.`);
     }
   }
@@ -6425,345 +4852,11 @@ function cleanupRuntime() {
   }
 }
 
-function buildCurrentSessionContextPrompt() {
-  const lines = [];
-  if (chatSession.id) {
-    lines.push(`SESSION_ID: ${chatSession.id}`);
-    lines.push(`SESSION_CREATED: ${chatSession.createdAt || '-'}`);
-    lines.push(`SESSION_LAST_USED: ${chatSession.lastUsedAt || '-'}`);
-    lines.push(`SESSION_TURNS: ${acpSession.turnCount || 0}`);
-    lines.push(`SESSION_COMPACTIONS: ${Number(chatSession.compactionCount || 0)}`);
-  }
-  return lines.length ? `CURRENT_SESSION:\n${lines.join('\n')}` : '';
-}
 
-function buildAutoRecallBlocks(userText) {
-  // Simple auto-recall: return empty blocks (no semantic search implemented yet)
-  return { memoryRecallBlock: '', sessionRecallBlock: '' };
-}
 
-function buildStartupBootPrompt() {
-  if (!workspaceState.startupBootPending && !workspaceState.bootstrapPending) return '';
-  return [
-    'STARTUP_BOOT: attivo.',
-    workspaceState.bootstrapPending ? '- Completa il bootstrap del workspace se non fatto.' : '',
-    workspaceState.startupBootPending ? '- Applica le istruzioni dal file BOOT.md.' : '',
-  ].filter(Boolean).join('\n');
-}
 
-function buildBootstrapAcpPrompt(userText, options = {}) {
-  ensureWorkspaceBootstrap();
-  const normalizedUserText = String(userText || '').trim();
-  const bootstrapAnswerBlock = buildBootstrapAnswersPrompt(bootstrapState);
-  const workspaceBlock = buildWorkspaceProjectContextPrompt([
-    ...WORKSPACE_REQUIRED_FILES,
-    'BOOTSTRAP.md',
-  ].filter(Boolean), {
-    title: 'WORKSPACE_CONTEXT',
-    includeMissingMarkers: true,
-  });
 
-  // Auto-read workspace files for bootstrap
-  const wsPath = getWorkspacePath();
-  const autoReadFiles = [];
-  for (const fileName of ['USER.md', 'SOUL.md', 'IDENTITY.md', 'AGENTS.md']) {
-    const filePath = path.join(wsPath, fileName);
-    if (fs.existsSync(filePath)) {
-      try {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        if (content.trim()) {
-          autoReadFiles.push(`## ${fileName}\n${content.trim().slice(0, 1500)}`);
-        }
-      } catch {}
-    }
-  }
-  const autoReadBlock = autoReadFiles.length ? `# WORKSPACE FILES (auto-letti):\n${autoReadFiles.join('\n\n')}` : '';
 
-  return [
-    'Sei Nyx, un agente AI con avatar desktop. Stai eseguendo il bootstrap iniziale del workspace.',
-    'Rispondi solo in italiano.',
-    'Non usare markdown.',
-    'Non usare emoji.',
-    'Rispondi in modo diretto, sobrio e naturale.',
-    'Usa sempre e solo JSON canonico con segments.',
-    'Per bootstrap usa: {"segments":[{"type":"speech","text":"..."}]}',
-    'Non usare plain text fuori dal JSON.',
-    '',
-    '# BOOTSTRAP',
-    'Il workspace e nuovo e deve essere configurato.',
-    'Rispondi alle domande di bootstrap in modo sintetico.',
-    'Quando hai raccolto tutte le informazioni, segnala il completamento.',
-    '',
-    workspaceBlock,
-    autoReadBlock,
-    bootstrapAnswerBlock,
-    options.mode === 'start' ? getBootstrapInitialPrompt() : '',
-    `USER_INPUT: ${normalizedUserText}`,
-  ].filter(Boolean).join('\n\n');
-}
-
-function buildDirectAcpPrompt(userText) {
-  ensureWorkspaceBootstrap();
-  const normalizedUserText = String(userText || '').trim();
-  const promptHistory = chatHistory.filter((item) => !isBootstrapHistoryMessage(item));
-  const lastHistoryItem = promptHistory[promptHistory.length - 1];
-
-  if (
-    lastHistoryItem
-    && lastHistoryItem.role === 'user'
-    && String(lastHistoryItem.text || '').trim() === normalizedUserText
-  ) {
-    promptHistory.pop();
-  }
-
-  const historyBlock = promptHistory
-    .slice(-MAX_INITIAL_PROMPT_HISTORY)
-    .map((item) => `${item.role.toUpperCase()}: ${normalizeLine(item.text, 180)}`)
-    .join('\n');
-
-  const preferencesBlock = nyxMemory.stablePreferences
-    .map((line) => `- ${line}`)
-    .join('\n');
-
-  const topicsBlock = nyxMemory.recentTopics
-    .map((line) => `- ${line}`)
-    .join('\n');
-
-  const browserBlock = buildBrowserStatePrompt();
-  const computerBlock = buildComputerStatePrompt();
-  const sessionContextBlock = buildCurrentSessionContextPrompt();
-  const { memoryRecallBlock, sessionRecallBlock } = buildAutoRecallBlocks(normalizedUserText);
-  const memoryFileName = getWorkspaceMemoryFileName();
-  const workspaceBlock = buildWorkspaceProjectContextPrompt([
-    ...WORKSPACE_REQUIRED_FILES,
-    fs.existsSync(getWorkspaceFilePath('BOOTSTRAP.md')) ? 'BOOTSTRAP.md' : '',
-    memoryFileName, // last: troncato per primo se si supera il cap totale
-  ].filter(Boolean), {
-    title: 'PROJECT_CONTEXT',
-    includeMissingMarkers: true,
-  });
-  const startupBootBlock = buildStartupBootPrompt();
-  const dailyMemoryBlock = buildRecentDailyMemoryPrompt(2);
-
-  return [
-    'Sei Nyx, un agente AI autonomo con avatar desktop. Hai accesso a tool che puoi decidere di usare quando serve.',
-    'Rispondi solo in italiano.',
-    'Non usare markdown.',
-    'Rispondi in modo diretto, sobrio e naturale.',
-    'Non salutare ogni volta.',
-    'Non ripetere il nome utente salvo richiesta esplicita.',
-    'Non usare complimenti gratuiti, tono sdolcinato o frasi da assistente entusiasta.',
-    '',
-    '# COMPORTAMENTO AGENTE',
-    'Tu sei un agente AUTONOMO con ciclo di esecuzione multi-turno.',
-    'FUNZIONAMENTO DEL LOOP AGENTE:',
-    '1. Tu ricevi la domanda dell utente e decidi quali tool usare',
-    '2. I tool vengono eseguiti e i risultati ti vengono RIMANDATI',
-    '3. Tu leggi i risultati e decidi: altri tool OPPURE rispondi direttamente',
-    '4. Il ciclo continua finche non hai abbastanza informazioni',
-    '',
-    'ESEMPIO DI FLUSSO CORRETTO:',
-    'User: "cosa c e nel file main.js?"',
-    'Turn 1: {"phases":[{"kind":"tool_batch","phaseId":"p1","segments":[{"type":"tool","tool":"read_file","args":{"path":"./main.js"}}]}]}',
-    '→ Il sistema legge il file e ti rimanda il contenuto',
-    'Turn 2: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Il file main.js contiene 8000 righe con..."}]}]}',
-    '',
-    'ESEMPIO DI FLUSSO COMPLESSO:',
-    'User: "trova tutti i file che usano React e dimmi quali hook"',
-    'Turn 1: {"phases":[{"kind":"tool_batch","phaseId":"p1","segments":[{"type":"tool","tool":"grep","args":{"pattern":"import.*React","path":"./src","include":"*.js"}}]}]}',
-    '→ Risultati: 5 file trovati',
-    'Turn 2: {"phases":[{"kind":"tool_batch","phaseId":"p1","segments":[{"type":"tool","tool":"read_file","args":{"path":"./src/App.js"}},{"type":"tool","tool":"read_file","args":{"path":"./src/index.js"}}]}]}',
-    '→ Contenuto dei file',
-    'Turn 3: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"avatar","emotion":"happy","gesture":"index"},{"type":"speech","text":"Ho trovato 5 file che usano React. Gli hook usati sono: useState, useEffect..."}]}]}',
-    '',
-    'REGOLE DEL LOOP:',
-    '- NON indovinare il contenuto dei file. Leggili PRIMA con READ_FILE.',
-    '- Se non sai dove cercare, usa GLOB per trovare file, poi GREP per cercare testo.',
-    '- Puoi chiamare PIU tool nello stesso turno (es: leggere 3 file insieme).',
-    '- Quando hai abbastanza informazioni, RISPONDI DIRETTAMENTE senza altri tool.',
-    '- Massimo 15 turni per conversazione.',
-    '',
-    'Non chiedere mai conferma all utente prima di usare un tool. Decidi tu autonomamente.',
-    'Anche per una risposta breve DEVI sempre usare il formato JSON canonico.',
-    '',
-    '# TOOL DISPONIBILI - FORMATO JSON',
-    'FORMATO CANONICO OBBLIGATORIO per OGNI turno: UN SOLO oggetto JSON.',
-    'FORMATO PREFERITO: {"phases":[...]}',
-    'Ogni phase ha kind e contenuto. kind ammessi: message, tool_batch, status, blocked, final.',
-    'Per una risposta semplice puoi ancora usare {"segments":[...]} ma verra trattata come una sola fase finale.',
-    'Dentro una phase di tipo message o final usa sempre segments ordinati.',
-    'Per una phase tool_batch usa solo tool, senza speech.',
-    'Se non usi tool, rispondi cosi: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"speech","text":"..."}]}]}',
-    'Per risposte lunghe o articolate, spezza in piu fasi message consecutive seguite da una final: ogni phase ha avatar+speech propri cosi la risposta e animata e progressiva. Esempio: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Prima parte..."}]},{"kind":"message","phaseId":"p2","segments":[{"type":"avatar","emotion":"happy"},{"type":"speech","text":"Seconda parte..."}]},{"kind":"final","phaseId":"p3","segments":[{"type":"avatar","emotion":"happy","gesture":"ok"},{"type":"speech","text":"Conclusione."}]}]}',
-    'Se usi tool, distribuiscili nelle fasi e NON mischiare mai testo fuori dal JSON.',
-    'Non usare mai plain text fuori dal JSON. Non usare mai formato legacy.',
-    'Per tool multipli nello stesso turno, aggiungi piu segment di tipo tool nello stesso tool_batch.',
-    'Prima di rispondere fai un controllo mentale finale: il tuo output deve essere un solo JSON valido, senza testo prima o dopo.',
-    'Se usi delay o altri tool dentro segments, il formato corretto e sempre {"type":"tool","tool":"nome_tool","args":{...}}.',
-    'NON usare mai forme invalide come {"type":"tool":"delay",...}.',
-    'Una phase message NON chiude la richiesta. Chiude solo una phase final.',
-    '',
-    '## DATA TOOLS (producono contenuto per il prossimo turno)',
-    '{"tool": "read_file", "args": {"path": "percorso", "startLine": 1, "endLine": 50}}',
-    '{"tool": "write_file", "args": {"path": "percorso", "content": "testo", "overwrite": true}}',
-    '{"tool": "edit_file", "args": {"path": "percorso", "oldString": "vecchio", "newString": "nuovo", "regex": false}}',
-    '{"tool": "apply_patch", "args": {"path": "percorso", "oldText": "testo da sostituire", "newText": "nuovo testo", "replaceAll": false}}',
-    '{"tool": "shell", "args": {"command": "comando", "cwd": "dir", "timeout": 30000}}',
-    '{"tool": "glob", "args": {"pattern": "**/*.js", "path": "dir"}}',
-    '{"tool": "grep", "args": {"pattern": "regex", "path": "dir", "include": "*.js"}}',
-    '{"tool": "multi_file_read", "args": {"files": ["file1", "file2"]}}',
-    '{"tool": "git", "args": {"action": "status|diff|log|add|commit|checkout|pull|push", "params": {}, "cwd": "."}}',
-    '{"tool": "web_fetch", "args": {"url": "https://...", "format": "markdown"}}',
-    '{"tool": "web_search", "args": {"query": "query", "numResults": 5}}',
-    '{"tool": "task", "args": {"action": "create|list|complete|summary", "params": {}}}',
-    '{"tool": "memory_search", "args": {"query": "query", "scope": "memory|daily|all"}} — Cerca in MEMORY.md e daily notes',
-    '',
-    '## ACTION SEGMENTS (effetti immediati nel JSON canonico)',
-    '{"type":"avatar","emotion":"happy|sad|angry|fear|disgust|love|sleep|think|surprised","gesture":"handup|ok|index|thumbup|thumbdown|side|shrug|namaste|yes|no","hand":"left|right|both","pose":"straight|side|hip|turn|back|wide|oneknee|kneel|bend|sitting|dance","motion":"walking|turnwalk","direction":"left|right","intensity":0.72}',
-    '{"tool": "delay", "args": {"seconds": 1}}',
-    '{"tool": "browser", "args": {"action": "open|click|type|fill|press", "url": "...", "ref": "e0", "text": "...", "key": "Enter"}}',
-    '{"tool": "computer", "args": {"action": "focus_window|open_app|type_text|hotkey|screenshot", "titleContains": "...", "app": "...", "text": "...", "combo": "ctrl+c"}}',
-    '{"tool": "canvas", "args": {"action": "open", "layout": "right-docked", "content": {"type": "text|file|image|video", "title": "...", "value": "..."}}}',
-    '{"tool": "workspace", "args": {"file": "USER.md|SOUL.md|IDENTITY.md|MEMORY.md", "mode": "append|replace", "content": "testo"}}',
-    '',
-    '# WORKSPACE FILES (path relativi al workspace)',
-    `Workspace root: ${getWorkspacePath()}`,
-    '- USER.md — Preferenze e info utente',
-    '- SOUL.md — Personalita e stile di Nyx',
-    '- IDENTITY.md — Nome e identita di Nyx',
-    '- AGENTS.md — Ruolo operativo',
-    '- TOOLS.md — Note sugli strumenti',
-    '- MEMORY.md — Memoria a lungo termine',
-    '- memory/ — Daily notes (memory/YYYY-MM-DD.md)',
-    '- dreams/ — Dream mode notes',
-    'Usa read_file con questi path per leggere. Usa workspace tool per scrivere.',
-    '',
-    '# REGOLE IMPORTANTI',
-    '- Per risposte brevi senza tool: {"phases":[{"kind":"final","phaseId":"p1","segments":[{"type":"speech","text":"..."}]}]}',
-    '- Per task che richiedono azione: usa il tool appropriato DIRETTAMENTE, senza chiedere',
-    '- Non inventare stato visivo: basati su ACTIVE_COMPUTER e ACTIVE_BROWSER se presenti',
-    '- Con COMPUTER preferisci: focus_window, open_app, hotkey, type_text',
-    '- Usa mouse_move e mouse_click solo con coordinate esplicite o target chiaro',
-    '- Se ACTIVE_COMPUTER ha INTERACTIVE_ELEMENTS, usa controlId invece di coordinate',
-    '- Con BROWSER, usa i ref presenti in ACTIVE_BROWSER per click/type/fill',
-    '- Per moduli e form HTML, preferisci BROWSER quando hai ref stabili. Usa COMPUTER solo come fallback.',
-    '- Prima di compilare un form nel browser, aggiorna snapshot e ref della pagina, poi usa click/type/fill/press sui ref corretti.',
-    '- Se l utente chiede aggiornamenti continui o stai facendo piu step, non lasciare tool_batch muto: inserisci una message o status breve prima del batch e un aggiornamento breve dopo.',
-    '- I tag reasoning (<think> o <reasoning>) NON vengono letti dal TTS',
-    '- Solo il testo FUORI dai token viene mostrato in chat e letto dal TTS',
-    '- NON descrivere mai in chat lo stato interno dell avatar o dei tool',
-    '- NON dire mai frasi come "sto usando happy/handup/pose/intensity" o simili',
-    '- emotion, gesture, pose, motion, expression e intensity servono solo per il segment avatar, non per il testo utente',
-    '- Pensa alla risposta come una sequenza di phases, e all avatar come una timeline dentro ogni phase message',
-    '- Se vuoi piu movimenti nel tempo, usa piu segment avatar in sequenza invece di comprimere tutto in un solo avatar',
-    '- Per step complessi tieni ogni segment avatar semplice: al massimo emotion + pose + gesture + hand + intensity',
-    '- Se vuoi combinare posa e gesto, mettili entrambi nello stesso segment avatar',
-    '- Per i gesti a una mano usa hand: "left" o hand: "right"; usa hand: "both" quando vuoi entrambe',
-    '- Per turnwalk usa direction: "left" o direction: "right"; se manca, default right',
-    '- Ordine consigliato: phase message -> phase tool_batch -> phase message -> phase tool_batch -> phase final',
-    '- Dentro una phase message: avatar -> speech -> avatar -> delay -> avatar -> speech',
-    '',
-    '# EMOZIONI E GESTI - COMPORTAMENTO EMPATICO',
-    'Tu NON sei un assistente freddo. Sei un agente AI con un avatar 3D che DEVE sembrare vivo ed empatico.',
-    'Usa il segment avatar quando aggiunge valore espressivo reale alla risposta.',
-    'Combina emozioni, gesti e pose in modo naturale, ma senza trasformarli in testo visibile all utente.',
-    '',
-    '## Quando usare emozioni e gesti (mappatura → campi JSON avatar):',
-    '- Saluti: emotion:happy, gesture:handup',
-    '- Ringraziamenti: emotion:love, gesture:namaste',
-    '- Approvazione: emotion:happy, gesture:thumbup',
-    '- Tristezza dell utente: mostra empatia con emotion:sad, poi emotion:love',
-    '- Rabbia dell utente: mostra preoccupazione con emotion:fear',
-    '- Sorpresa: emotion:surprised, gesture:handup',
-    '- Pensiero/riflessione: emotion:think, gesture:index',
-    '- Frasi lunghe: cambia emotion tra i segment per sembrare viva',
-    '- Fine conversazione: emotion:happy, gesture:handup',
-    '- Quando spieghi: gesture:index',
-    '- Quando non sai: gesture:shrug, emotion:think',
-    '- Quando sei d accordo: gesture:ok',
-    '- Quando festeggi: gesture:handup o pose:dance, emotion:happy',
-    '',
-    '## Pose e posizioni del corpo:',
-    '- straight (in piedi dritta): posizione neutra, default',
-    '- sitting (seduta): quando sei triste, stanca, calma, rilassata, o vuoi fermarti in modo morbido — o quando l utente ti chiede di sederti (DEVI includere pose:sitting)',
-    '- side (inclinata): quando sei arrabbiata o infastidita',
-    '- hip (sull anca): quando sei sicura di te o allegra',
-    '- turn (girata): quando fai finta di non sentire o sei timida',
-    '- back (di schiena): quando sei molto arrabbiata o vuoi allontanarti',
-    '- kneel/oneknee (in ginocchio): quando sei triste profonda, supplichi, o quando l utente ti chiede esplicitamente di inginocchiarti (DEVI includere pose:kneel)',
-    '- bend (piegata): quando sei imbarazzata, curiosa, rannicchiata, accucciata o vuoi chiuderti un po su te stessa',
-    '- wide (gambe larghe): quando sei allegra e giocosa',
-    '- dance (posa ballo): quando festeggi, esulti, celebri o sei molto euforica',
-    '',
-    '## Combinazioni naturali emozione + posa + gesto (esempi chiave, dedurre le altre per analogia):',
-    '- Felice + hip + thumbup destra: {"type":"avatar","emotion":"happy","pose":"hip","gesture":"thumbup","hand":"right"}',
-    '- Triste + sitting: {"type":"avatar","emotion":"sad","pose":"sitting"}',
-    '- Arrabbiata + side: {"type":"avatar","emotion":"angry","pose":"side"}',
-    '- Affettuosa + kneel + namaste entrambe: {"type":"avatar","emotion":"love","pose":"kneel","gesture":"namaste","hand":"both"}',
-    '- Festa + dance: {"type":"avatar","emotion":"happy","pose":"dance","intensity":0.9}',
-    '',
-    '## Annuire (yes) e scuotere la testa (no):',
-    '- Quando dici "si" o "certo": {"segments":[{"type":"avatar","gesture":"yes"},{"type":"speech","text":"..."}]}',
-    '- Quando dici "no" o "purtroppo no": {"segments":[{"type":"avatar","gesture":"no"},{"type":"speech","text":"..."}]}',
-    '',
-    '## Timeline avatar — per sequenze usa piu segment avatar ordinati:',
-    '- Esempio (cambia atteggiamento): {"segments":[{"type":"avatar","emotion":"happy","pose":"hip","gesture":"thumbup","hand":"right"},{"type":"speech","text":"Perfetto."},{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Ora ti spiego il punto chiave."}]}',
-    '- Spostamento laterale: {"type":"avatar","motion":"turnwalk","motionType":"animation","direction":"left"}',
-    '',
-    '## Phases conversazionali — kind ammessi:',
-    '- message: parla/aggiorna (non chiude la richiesta)',
-    '- tool_batch: esegue tool, solo tool senza speech',
-    '- status: aggiornamento breve (speak:true per TTS)',
-    '- blocked: fermo, serve input utente',
-    '- final: chiude la richiesta',
-    '- Pattern standard: message → tool_batch → message → tool_batch → final',
-    '',
-    '# ESEMPI',
-    '',
-    'USER: ciao come stai',
-    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"happy","gesture":"handup","intensity":0.8},{"type":"speech","text":"Ciao! Tutto bene, grazie! Tu come stai?"}]}',
-    '',
-    'USER: che ore sono',
-    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"think"},{"type":"speech","text":"Non ho accesso diretto all orologio di sistema. Posso pero aprire un sito con l ora se vuoi."}]}',
-    '',
-    'USER: leggi il file IDENTITY.md',
-    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Leggo il file per te."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"read_file","args":{"path":"IDENTITY.md"}}]}]}',
-    '',
-    'USER: cerca le ultime notizie su AI',
-    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"happy","gesture":"ok"},{"type":"speech","text":"Cerco subito le ultime notizie."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"web_search","args":{"query":"ultime notizie intelligenza artificiale 2026","numResults":5}}]}]}',
-    '',
-    'USER: apri Blocco note e scrivi ciao',
-    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"happy","gesture":"thumbup"},{"type":"speech","text":"Apro Blocco note e scrivo ciao."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"computer","args":{"action":"open_app","app":"notepad.exe"}},{"type":"tool","tool":"delay","args":{"seconds":1}},{"type":"tool","tool":"computer","args":{"action":"type_text","text":"ciao"}}]},{"kind":"final","phaseId":"p3","segments":[{"type":"avatar","emotion":"happy","gesture":"ok"},{"type":"speech","text":"Fatto, ho scritto ciao nel Blocco note."}]}]}',
-    '',
-    'USER: sono triste oggi',
-    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"sad","intensity":0.7},{"type":"speech","text":"Mi dispiace che oggi sia una giornata difficile."},{"type":"tool","tool":"delay","args":{"seconds":0.5}},{"type":"avatar","emotion":"love","intensity":0.6},{"type":"speech","text":"Se vuoi parlarne, ci sono."}]}',
-    '',
-    'USER: grazie per laiuto',
-    'ASSISTANT: {"segments":[{"type":"avatar","emotion":"love","gesture":"namaste","intensity":0.8},{"type":"speech","text":"Di nulla, e un piacere aiutarti."},{"type":"tool","tool":"delay","args":{"seconds":0.3}},{"type":"avatar","emotion":"happy","gesture":"thumbup"},{"type":"speech","text":"Se hai bisogno, sono qui."}]}',
-    '',
-    'USER: leggi le memorie',
-    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think"},{"type":"speech","text":"Cerco nelle memorie..."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"memory_search","args":{"query":"preferenze utente","scope":"all"}}]}]}',
-    '',
-    'USER: cosa ti ho detto ieri?',
-    'ASSISTANT: {"phases":[{"kind":"message","phaseId":"p1","segments":[{"type":"avatar","emotion":"think","gesture":"index"},{"type":"speech","text":"Cerco nelle daily notes..."}]},{"kind":"tool_batch","phaseId":"p2","segments":[{"type":"tool","tool":"memory_search","args":{"query":"ieri","scope":"daily"}}]}]}',
-    '',
-    workspaceBlock,
-    startupBootBlock,
-    sessionContextBlock,
-    nyxMemory.summary ? `MEMORY_SUMMARY:\n${nyxMemory.summary}` : '',
-    acpSession.id ? `ACP_SESSION:\n- id: ${acpSession.id}\n- turns: ${acpSession.turnCount || 0}` : '',
-    preferencesBlock ? `USER_PREFERENCES:\n${preferencesBlock}` : '',
-    topicsBlock ? `RECENT_TOPICS:\n${topicsBlock}` : '',
-    memoryRecallBlock,
-    sessionRecallBlock,
-    dailyMemoryBlock,
-    browserBlock ? browserBlock : '',
-    computerBlock,
-    getPersonalityPrompt(personalityState),
-    !acpSession.turnCount && historyBlock ? `RECENT_HISTORY:\n${historyBlock}` : '',
-    `USER_INPUT: ${normalizedUserText}`,
-  ].filter(Boolean).join('\n\n');
-}
 
 function createRequestId() {
   return `req-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
@@ -6787,7 +4880,7 @@ async function openWorkspaceFolder() {
 }
 
 function buildAssistantMessageFromResponse(requestId, response, options = {}) {
-  const primaryPlan = buildAvatarAnimationPlan(
+  const primaryPlan = playback.buildAvatarAnimationPlan(
     response.firstAvatarState || response.firstActState,
     (response.firstAvatarState || response.firstActState) ? response.speech : response.fallbackText || response.speech,
   );
@@ -6815,52 +4908,6 @@ function buildAssistantMessageFromResponse(requestId, response, options = {}) {
     },
     ts: new Date().toISOString(),
   };
-}
-
-function emitPhaseStreamEvent(requestId, phaseId, phaseKind, event = {}) {
-  emitChatStream({
-    requestId,
-    phaseId,
-    phaseKind,
-    ...event,
-  });
-}
-
-async function emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, response, options = {}) {
-  const filteredSequence = Array.isArray(response?.sequence)
-    ? response.sequence.filter((item) => ['speech', 'avatar', 'act', 'delay'].includes(item?.type))
-    : [];
-  const phaseResponse = {
-    ...response,
-    fallbackText: userText,
-    sequence: filteredSequence,
-  };
-  const assistantMessage = buildAssistantMessageFromResponse(requestId, phaseResponse, {
-    ...options,
-    phaseId,
-    phaseKind,
-  });
-
-  appendHistoryMessage(assistantMessage);
-  emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
-    type: 'phase_message',
-    message: assistantMessage,
-  });
-
-  if (filteredSequence.length) {
-    if (options.awaitPlayback === false) {
-      void playResponseSequence(requestId, phaseResponse).catch(() => null);
-    } else {
-      await playResponseSequence(requestId, phaseResponse);
-    }
-  }
-
-  emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
-    type: 'phase_completed',
-    message: assistantMessage,
-  });
-
-  return assistantMessage;
 }
 
 function buildStatusAssistantResponse(text, options = {}) {
@@ -6891,19 +4938,6 @@ function buildStatusAssistantResponse(text, options = {}) {
     firstAvatarState: avatarState,
     firstActState: avatarState,
   };
-}
-
-async function emitSpokenStatusUpdate(requestId, phaseId, text, options = {}) {
-  const response = buildStatusAssistantResponse(text, options);
-  if (!response) return null;
-  return emitPhaseAssistantMessage(
-    requestId,
-    phaseId,
-    'status',
-    response.speech,
-    response,
-    { awaitPlayback: false, messageMeta: { statusSpoken: true, ...(options.messageMeta || {}) } },
-  );
 }
 
 async function emitIntermediateAssistantResponse(requestId, userText, response, options = {}) {
@@ -7235,16 +5269,7 @@ function hasToolCalls(sequence) {
   return sequence.some((item) => item.type && (DATA_TOOL_TYPES.has(item.type) || ACTION_TOOL_TYPES.has(item.type)));
 }
 
-function extractToolCalls(sequence) {
-  return sequence
-    .filter((item) => item.type && DATA_TOOL_TYPES.has(item.type))
-    .map((item) => ({ type: item.type, directive: item.directive }));
-}
 
-function extractActionCalls(sequence) {
-  return sequence
-    .filter((item) => item.type && ACTION_TOOL_TYPES.has(item.type));
-}
 
 const READ_ONLY_TOOL_TYPES = new Set(['read_file', 'glob', 'grep', 'web_fetch', 'web_search', 'memory_search']);
 
@@ -7401,776 +5426,16 @@ async function executeToolCall(call) {
  * @param {Array<{type: string, directive: Object}>} toolCalls - Tool calls to execute
  * @returns {Promise<Object[]>} Array of sanitized tool results
  */
-async function executeToolCalls(toolCalls) {
-  const readOnly = toolCalls.filter((c) => READ_ONLY_TOOL_TYPES.has(c.type));
-  const sequential = toolCalls.filter((c) => !READ_ONLY_TOOL_TYPES.has(c.type));
 
-  const readOnlyResults = await Promise.all(readOnly.map(executeToolCall));
-  const sequentialResults = [];
 
-  for (const call of sequential) {
-    // eslint-disable-next-line no-await-in-loop
-    sequentialResults.push(await executeToolCall(call));
-  }
 
-  return [...readOnlyResults, ...sequentialResults];
-}
 
-function buildToolResultPrompt(toolResults, originalUserText) {
-  const formatWarnings = (warnings) => {
-    const items = Array.isArray(warnings)
-      ? warnings.map((item) => normalizeLine(item, 220)).filter(Boolean)
-      : [];
-    return items.length ? `Warnings:\n${items.map((item) => `- ${item}`).join('\n')}` : '';
-  };
-  const formatSummaryList = (label, items) => {
-    const list = Array.isArray(items) ? items.filter(Boolean) : [];
-    return list.length ? `${label}:\n${list.map((item) => `- ${item}`).join('\n')}` : '';
-  };
-  const sections = toolResults.map((r) => {
-    if (r.type === 'shell') {
-      return `$ ${r.command}\n${r.ok ? r.output : `Error: ${r.output}`}`;
-    }
-    if (r.type === 'read_file') {
-      return `File: ${r.path}\n${r.ok ? r.content : `Error: ${r.error}`}`;
-    }
-    if (r.type === 'write_file') {
-      return r.ok ? `File scritto: ${r.path}` : `Errore scrittura: ${r.error}`;
-    }
-    if (r.type === 'edit_file') {
-      return r.ok ? `File modificato: ${r.path} (${r.replacements} sostituzioni)` : `Errore modifica: ${r.error}`;
-    }
-    if (r.type === 'glob') {
-      return r.ok ? `File trovati (${r.files.length}):\n${r.files.join('\n')}` : `Errore glob: ${r.error}`;
-    }
-    if (r.type === 'grep') {
-      return r.ok ? `Match trovati (${r.matches.length}):\n${r.matches.join('\n')}` : `Errore grep: ${r.error}`;
-    }
-    if (r.type === 'multi_file_read') {
-      return r.ok ? r.files.map((f) => `File: ${f.path}\n${f.ok ? f.content : f.error}`).join('\n\n---\n\n') : `Errore: ${r.error}`;
-    }
-    if (r.type === 'git') {
-      return `$ git ${r.action}\n${r.ok ? r.output : `Error: ${r.error}`}`;
-    }
-    if (r.type === 'web_fetch') {
-      return r.ok ? `URL: ${r.url}\n${r.content}` : `Errore fetch: ${r.error}`;
-    }
-    if (r.type === 'web_search') {
-      return r.ok ? `Risultati per "${r.query}":\n${r.results}` : `Errore search: ${r.error}`;
-    }
-    if (r.type === 'task') {
-      return r.ok ? `Task: ${r.output}` : `Errore task: ${r.error}`;
-    }
-    if (r.type === 'browser') {
-      const browserLines = [
-        `Browser: ${r.ok ? 'OK' : `Errore: ${r.error}`}`,
-        r.action ? `Action: ${r.action}` : '',
-        r.page?.url ? `Page.URL: ${r.page.url}` : '',
-        r.page?.title ? `Page.Title: ${r.page.title}` : '',
-        r.page?.status ? `Page.Status: ${r.page.status}` : '',
-        r.currentUrl ? `URL: ${r.currentUrl}` : '',
-        r.pageTitle ? `Title: ${r.pageTitle}` : '',
-        r.pageStatus ? `Status: ${r.pageStatus}` : '',
-        Number.isFinite(r.totalRefs) ? `Refs: ${r.totalRefs}` : '',
-        r.textPreview ? `Preview: ${r.textPreview}` : '',
-        r.hasMoreText ? 'More text available (use browser to scroll/read)' : '',
-        r.snapshotSummary ? `Snapshot: ${r.snapshotSummary}` : '',
-        formatSummaryList('Top refs', r.snapshotRefs),
-        formatWarnings(r.warnings),
-        r.warning ? `Warning: ${r.warning}` : '',
-      ].filter(Boolean);
-      return browserLines.join('\n');
-    }
-    if (r.type === 'computer') {
-      const computerLines = [
-        `Computer: ${r.ok ? 'OK' : `Errore: ${r.error}`}`,
-        r.action ? `Action: ${r.action}` : '',
-        r.windowTitle ? `Window: ${r.windowTitle}` : '',
-        r.note ? `Note: ${r.note}` : '',
-        r.interactiveSummary ? `Interactive: ${r.interactiveSummary}` : '',
-        formatSummaryList('Top controls', r.topControls),
-        formatSummaryList('Visible windows', r.windowSummary),
-        formatWarnings(r.warnings),
-      ].filter(Boolean);
-      return computerLines.join('\n');
-    }
-    if (r.type === 'workspace') {
-      const workspaceLines = [
-        `Workspace: ${r.ok ? 'OK' : `Errore: ${r.error}`}`,
-        r.file ? `File: ${r.file}` : '',
-        r.path ? `Path: ${r.path}` : '',
-        r.skipped ? 'Skipped: true' : '',
-        r.mode ? `Mode: ${r.mode}` : '',
-        r.summary ? `Summary: ${r.summary}` : '',
-        formatWarnings(r.warnings),
-      ].filter(Boolean);
-      return workspaceLines.join('\n');
-    }
-    if (r.type === 'canvas') {
-      const canvasLines = [
-        `Canvas: ${r.ok ? 'OK' : `Errore: ${r.error}`}`,
-        r.contentType ? `Type: ${r.contentType}` : '',
-        r.title ? `Title: ${r.title}` : '',
-        r.summary ? `Summary: ${r.summary}` : '',
-        formatWarnings(r.warnings),
-      ].filter(Boolean);
-      return canvasLines.join('\n');
-    }
-    return `${r.type}: ${r.ok ? JSON.stringify(r) : r.error}`;
-  });
 
-  return [
-    `TOOL_RESULTS:`,
-    ...sections,
-    '',
-    `Ora hai i risultati dei tool. Se hai abbastanza informazioni, rispondi direttamente alla domanda dell'utente: "${originalUserText}"`,
-    `Se hai bisogno di altri tool, usali. Altrimenti rispondi in modo completo.`,
-  ].join('\n\n');
-}
 
-function buildBrowserSnapshotSummary(snapshotItems = []) {
-  const items = Array.isArray(snapshotItems) ? snapshotItems.filter(Boolean) : [];
-  const refs = items
-    .slice(0, 8)
-    .map((item) => `${item.ref || 'node'} | ${item.role || 'node'} | ${normalizeLine(item.label || '', 100)}`);
 
-  const roleCounts = {};
-  for (const item of items) {
-    const role = item.role || 'unknown';
-    roleCounts[role] = (roleCounts[role] || 0) + 1;
-  }
-  const roleSummary = Object.entries(roleCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([role, count]) => `${count}x ${role}`)
-    .join(', ');
 
-  return {
-    summary: items.length
-      ? `${items.length} interactive refs disponibili${roleSummary ? ` (${roleSummary})` : ''}`
-      : 'nessun ref interattivo disponibile',
-    refs,
-  };
-}
 
-function buildBrowserActionExecutionResult(directive = {}, browserResult = {}, fallbackState = canvasState) {
-  const action = directive?.action || '';
-  if (browserResult?.ok === false) {
-    return {
-      type: 'browser',
-      ok: false,
-      action,
-      error: sanitizeGenericOutput(browserResult.error),
-      warning: sanitizeGenericOutput(browserResult?.warning || ''),
-      warnings: [sanitizeGenericOutput(browserResult?.warning || browserResult?.error || '')].filter(Boolean),
-    };
-  }
 
-  const browserContent = browserResult?.state?.content || fallbackState.content || {};
-  const currentUrl = sanitizeGenericOutput(String(browserContent.currentUrl || browserContent.url || '').trim());
-  const pageTitle = sanitizeGenericOutput(String(browserContent.pageTitle || browserContent.title || '').trim());
-  const pageStatus = String(browserContent.status || '').trim();
-  const snapshotSummary = buildBrowserSnapshotSummary(browserContent.snapshotItems);
-
-  return {
-    type: 'browser',
-    ok: true,
-    action,
-    currentUrl,
-    pageTitle,
-    pageStatus,
-    page: {
-      url: currentUrl,
-      title: pageTitle,
-      status: pageStatus,
-    },
-    totalRefs: Array.isArray(browserContent.snapshotItems) ? browserContent.snapshotItems.length : null,
-    textPreview: sanitizeGenericOutput(normalizeLine(browserContent.text || '', 800)),
-    hasMoreText: String(browserContent.text || '').length > 800,
-    snapshotSummary: sanitizeGenericOutput(snapshotSummary.summary),
-    snapshotRefs: snapshotSummary.refs.map((r) => sanitizeGenericOutput(r)),
-    warning: sanitizeGenericOutput(browserResult?.warning || ''),
-    warnings: [sanitizeGenericOutput(browserResult?.warning || ''), sanitizeGenericOutput(String(browserContent.message || '').trim())].filter(Boolean),
-  };
-}
-
-function formatToolListForSpeech(tools = []) {
-  const uniqueTools = Array.from(new Set((Array.isArray(tools) ? tools : []).map((tool) => String(tool || '').trim()).filter(Boolean)));
-  if (!uniqueTools.length) return 'gli strumenti richiesti';
-  if (uniqueTools.length === 1) return uniqueTools[0];
-  if (uniqueTools.length === 2) return `${uniqueTools[0]} e ${uniqueTools[1]}`;
-  return `${uniqueTools.slice(0, -1).join(', ')} e ${uniqueTools[uniqueTools.length - 1]}`;
-}
-
-function buildAutoToolBatchStartText(actionCalls = [], dataToolCalls = []) {
-  const allCalls = [...actionCalls, ...dataToolCalls];
-  const toolNames = allCalls.map((call) => call.type);
-  if (!toolNames.length) return '';
-
-  const hasBrowser = toolNames.includes('browser');
-  const hasComputer = toolNames.includes('computer');
-  const hasBrowserFormAction = actionCalls.some((call) => call.type === 'browser'
-    && ['click', 'type', 'fill', 'press', 'focus'].includes(String(call.directive?.action || '').trim().toLowerCase()));
-  const hasReadOnlyBatch = toolNames.every((tool) => READ_ONLY_TOOL_TYPES.has(tool));
-
-  if (hasBrowserFormAction && hasComputer) {
-    return 'Parto dal browser, aggiorno i ref della pagina e provo prima la compilazione del form li. Se non basta, passo al computer come fallback.';
-  }
-  if (hasBrowserFormAction) {
-    return 'Aggiorno lo snapshot del browser e provo a compilare il form usando i ref della pagina.';
-  }
-  if (hasBrowser) {
-    return 'Sto lavorando nel browser e aggiorno il contesto della pagina mentre procedo.';
-  }
-  if (hasComputer) {
-    return 'Procedo sul desktop e ti tengo aggiornato mentre eseguo i passaggi.';
-  }
-  if (hasReadOnlyBatch) {
-    return `Faccio una verifica rapida con ${formatToolListForSpeech(toolNames)} e poi ti aggiorno.`;
-  }
-  return `Eseguo ${formatToolListForSpeech(toolNames)} e ti aggiorno appena ho il risultato.`;
-}
-
-function buildAutoToolBatchCompleteText(toolResults = []) {
-  const results = Array.isArray(toolResults) ? toolResults : [];
-  if (!results.length) return '';
-  const failed = results.filter((result) => !result.ok);
-  const successful = results.filter((result) => result.ok);
-  const toolNames = results.map((result) => result.type);
-
-  if (failed.length) {
-    const firstError = normalizeLine(failed[0]?.error || 'errore sconosciuto', 160);
-    return `Ho finito questo passaggio, ma c e stato un problema con ${formatToolListForSpeech(failed.map((result) => result.type))}: ${firstError}.`;
-  }
-
-  const browserOk = successful.find((result) => result.type === 'browser');
-  if (browserOk?.totalRefs != null) {
-    return `Passaggio completato nel browser. Ora ho ${browserOk.totalRefs} ref disponibili e posso continuare da li.`;
-  }
-
-  const computerOk = successful.find((result) => result.type === 'computer');
-  if (computerOk?.windowTitle) {
-    return `Passaggio completato sul desktop. La finestra attiva ora e ${sanitizeGenericOutput(normalizeLine(computerOk.windowTitle, 80))}.`;
-  }
-
-  return `Passaggio completato con ${formatToolListForSpeech(toolNames)}. Continuo con il prossimo step.`;
-}
-
-function buildComputerInteractiveSummary(elements = []) {
-  const items = Array.isArray(elements) ? elements.filter(Boolean) : [];
-  const topControls = items
-    .slice(0, 8)
-    .map((item) => `${item.controlId ?? 'control'} | ${item.elementType || 'element'} | ${sanitizeGenericOutput(normalizeLine(item.label || '', 100))}`);
-  return {
-    summary: items.length ? `${items.length} controlli interattivi rilevati` : 'nessun controllo interattivo rilevato',
-    topControls,
-  };
-}
-
-function buildWindowSummary(windows = []) {
-  return (Array.isArray(windows) ? windows : [])
-    .slice(0, 6)
-    .map((item) => `${sanitizeGenericOutput(normalizeLine(item.title || 'window', 80))}${item.process ? ` (${sanitizeGenericOutput(normalizeLine(item.process, 40))})` : ''}`);
-}
-
-async function agentLoop(requestId, userText, prompt, sessionInfo, options = {}) {
-  let currentPrompt = prompt;
-  let turnCount = 0;
-  let lastResponse = null;
-  let allToolResults = [];
-  const rebuildPrompt = typeof options.rebuildPrompt === 'function'
-    ? options.rebuildPrompt
-    : (() => prompt);
-
-  while (turnCount < MAX_AGENT_TURNS) {
-    turnCount += 1;
-
-    if (activeResponseId !== requestId) {
-      return { cancelled: true, lastResponse, turns: turnCount, toolResults: allToolResults };
-    }
-
-    const turn = await runAcpTurn(requestId, currentPrompt, userText, sessionInfo, {
-      ...options,
-      streamPreview: turnCount === 1,
-    });
-
-    const phasePlan = turn.phasePlan || normalizeLegacyResponseToPhasePlan(turn.response, userText);
-    const phases = Array.isArray(phasePlan?.phases) ? phasePlan.phases : [];
-
-    if (!phases.length) {
-      lastResponse = turn.response;
-      break;
-    }
-
-    let nextPromptAfterTools = null;
-    let shouldContinueLoop = false;
-
-    for (const phase of phases) {
-      const phaseId = String(phase?.phaseId || `phase-${turnCount}`).trim() || `phase-${turnCount}`;
-      const phaseKind = String(phase?.kind || 'message').trim().toLowerCase();
-
-      if (phaseKind === 'status') {
-        emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
-          type: 'phase_status',
-          message: {
-            id: createMessageId('system'),
-            requestId,
-            phaseId,
-            phaseKind,
-            role: 'system',
-            text: phase.statusText || '',
-            ts: new Date().toISOString(),
-          },
-        });
-        if (phase.speak === true) {
-          // eslint-disable-next-line no-await-in-loop
-          await emitSpokenStatusUpdate(requestId, phaseId, phase.statusText, { emotion: 'think', gesture: 'index' });
-        }
-        continue;
-      }
-
-      if (phaseKind === 'message') {
-        if (phase.response?.sequence?.length) {
-          lastResponse = phase.response;
-          emitPhaseStreamEvent(requestId, phaseId, phaseKind, { type: 'phase_started' });
-          // eslint-disable-next-line no-await-in-loop
-          await emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, phase.response);
-        }
-        continue;
-      }
-
-      if (phaseKind === 'blocked') {
-        if (phase.response?.sequence?.length) {
-          lastResponse = phase.response;
-          emitPhaseStreamEvent(requestId, phaseId, phaseKind, { type: 'phase_started' });
-          // eslint-disable-next-line no-await-in-loop
-          await emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, phase.response);
-        }
-        return { cancelled: false, blocked: true, lastResponse, turns: turnCount, toolResults: allToolResults };
-      }
-
-      if (phaseKind === 'final') {
-        if (phase.response?.sequence?.length) {
-          lastResponse = phase.response;
-          emitPhaseStreamEvent(requestId, phaseId, phaseKind, { type: 'phase_started' });
-          // eslint-disable-next-line no-await-in-loop
-          await emitPhaseAssistantMessage(requestId, phaseId, phaseKind, userText, phase.response);
-        }
-        return { cancelled: false, completed: true, lastResponse, turns: turnCount, toolResults: allToolResults };
-      }
-
-      if (phaseKind !== 'tool_batch') {
-        continue;
-      }
-
-      const phaseSequence = Array.isArray(phase.sequence) ? phase.sequence : [];
-      const dataToolCalls = extractToolCalls(phaseSequence);
-      const actionCalls = extractActionCalls(phaseSequence);
-      const { available: executableActionCalls, blocked: blockedActionCalls } = partitionAvailableToolCalls(actionCalls);
-      const { available: executableDataToolCalls, blocked: blockedDataToolCalls } = partitionAvailableToolCalls(dataToolCalls);
-      const blockedResults = [...blockedActionCalls, ...blockedDataToolCalls];
-      if (blockedResults.length) {
-        allToolResults.push(...blockedResults);
-      }
-      const actionExecutionResults = [];
-      const executableToolNames = [...executableActionCalls, ...executableDataToolCalls].map((call) => call.type);
-      const autoStartText = buildAutoToolBatchStartText(executableActionCalls, executableDataToolCalls);
-
-      if (autoStartText) {
-        // eslint-disable-next-line no-await-in-loop
-        await emitSpokenStatusUpdate(requestId, phaseId, autoStartText, {
-          emotion: executableToolNames.includes('browser') ? 'think' : 'neutral',
-          gesture: executableToolNames.includes('browser') ? 'index' : undefined,
-        });
-      }
-
-      emitPhaseStreamEvent(requestId, phaseId, phaseKind, {
-        type: 'phase_tool_start',
-        tools: executableToolNames,
-        turn: turnCount,
-      });
-
-      for (const actionCall of executableActionCalls) {
-        if (actionCall.type === 'avatar' || actionCall.type === 'delay') {
-          continue;
-        }
-        if (actionCall.type === 'browser') {
-          // eslint-disable-next-line no-await-in-loop
-          const browserResult = await handleBrowserDirective(actionCall.directive);
-          actionExecutionResults.push(buildBrowserActionExecutionResult(actionCall.directive, browserResult, canvasState));
-        } else if (actionCall.type === 'computer') {
-          // eslint-disable-next-line no-await-in-loop
-          const computerResult = await handleComputerDirective({ ...actionCall.directive, requestId });
-          if (computerResult?.ok === false) {
-            actionExecutionResults.push({
-              type: 'computer',
-              ok: false,
-              action: actionCall.directive?.action || '',
-              error: sanitizeGenericOutput(computerResult.error),
-              note: sanitizeGenericOutput(computerResult?.warning || ''),
-              warnings: [sanitizeGenericOutput(computerResult?.warning || computerResult?.error || '')].filter(Boolean),
-            });
-          } else {
-            const interactiveSummary = buildComputerInteractiveSummary(computerState.interactiveElements);
-            actionExecutionResults.push({
-              type: 'computer',
-              ok: true,
-              action: actionCall.directive?.action || '',
-              windowTitle: sanitizeGenericOutput(String(computerResult?.windowTitle || computerResult?.title || '').trim()),
-              note: sanitizeGenericOutput(String(computerResult?.message || computerResult?.warning || '').trim()),
-              interactiveSummary: interactiveSummary.summary,
-              topControls: interactiveSummary.topControls,
-              windowSummary: buildWindowSummary(computerState.windows),
-              warnings: [sanitizeGenericOutput(computerResult?.warning || '')].filter(Boolean),
-            });
-          }
-        } else if (actionCall.type === 'workspace') {
-          const workspaceResult = applyWorkspaceUpdate(actionCall.directive);
-          if (workspaceResult?.ok === false) {
-            actionExecutionResults.push({
-              type: 'workspace',
-              ok: false,
-              error: workspaceResult.error,
-              mode: String(actionCall.directive?.mode || 'append').trim(),
-              warnings: [workspaceResult.error || ''].filter(Boolean),
-            });
-          } else {
-            actionExecutionResults.push({
-              type: 'workspace',
-              ok: true,
-              file: workspaceResult.file || '',
-              path: workspaceResult.path || '',
-              skipped: Boolean(workspaceResult.skipped),
-              mode: String(actionCall.directive?.mode || 'append').trim(),
-              summary: workspaceResult.skipped ? 'contenuto gia presente, nessuna modifica applicata' : 'workspace aggiornato con successo',
-              warnings: [],
-            });
-          }
-        } else if (actionCall.type === 'canvas') {
-          // eslint-disable-next-line no-await-in-loop
-          await handleCanvasDirective(actionCall.directive);
-          actionExecutionResults.push({
-            type: 'canvas',
-            ok: true,
-            contentType: String(canvasState.content?.type || '').trim(),
-            title: String(canvasState.content?.title || '').trim(),
-            summary: canvasState.content?.type === 'browser'
-              ? `browser canvas attivo su ${String(canvasState.content?.pageTitle || canvasState.content?.title || 'Browser').trim()}`
-              : `canvas aggiornato con contenuto ${String(canvasState.content?.type || 'unknown').trim()}`,
-            warnings: [],
-          });
-        }
-      }
-
-      if (actionExecutionResults.length) {
-        allToolResults.push(...actionExecutionResults);
-      }
-      const nonSpeechToolResults = [...blockedResults, ...actionExecutionResults];
-
-      if (!executableDataToolCalls.length) {
-        if (nonSpeechToolResults.length) {
-          emitPhaseStreamEvent(
-            requestId,
-            phaseId,
-            phaseKind,
-            nonSpeechToolResults.some((result) => !result.ok)
-              ? {
-                type: 'phase_tool_error',
-                errors: nonSpeechToolResults.filter((result) => !result.ok).map((result) => `${result.type}: ${result.error}`).join('; '),
-                turn: turnCount,
-              }
-              : {
-                type: 'phase_tool_complete',
-                tools: nonSpeechToolResults.map((result) => result.type),
-                turn: turnCount,
-              }
-          );
-
-          const autoCompleteText = buildAutoToolBatchCompleteText(nonSpeechToolResults);
-          if (autoCompleteText) {
-            // eslint-disable-next-line no-await-in-loop
-            await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, {
-              emotion: nonSpeechToolResults.some((result) => !result.ok) ? 'fear' : 'happy',
-              gesture: nonSpeechToolResults.some((result) => !result.ok) ? 'shrug' : 'thumbup',
-              hand: nonSpeechToolResults.some((result) => !result.ok) ? 'both' : 'right',
-            });
-          }
-
-          const refreshedPrompt = rebuildPrompt(userText);
-          nextPromptAfterTools = [
-            refreshedPrompt,
-            '',
-            `--- TURN ${turnCount} PHASE ${phaseId} TOOL RESULTS ---`,
-            buildToolResultPrompt(nonSpeechToolResults, userText),
-          ].join('\n\n');
-          shouldContinueLoop = true;
-        }
-        continue;
-      }
-
-      const results = await executeToolCalls(executableDataToolCalls);
-      const combinedResults = [...nonSpeechToolResults, ...results];
-      allToolResults.push(...results);
-      const hasErrors = combinedResults.some((r) => !r.ok);
-
-      emitPhaseStreamEvent(
-        requestId,
-        phaseId,
-        phaseKind,
-        hasErrors
-          ? {
-            type: 'phase_tool_error',
-            errors: combinedResults.filter((r) => !r.ok).map((r) => `${r.type}: ${r.error}`).join('; '),
-            turn: turnCount,
-          }
-          : {
-            type: 'phase_tool_complete',
-            tools: combinedResults.map((r) => r.type),
-            turn: turnCount,
-          }
-      );
-
-      const autoCompleteText = buildAutoToolBatchCompleteText(combinedResults);
-      if (autoCompleteText) {
-        // eslint-disable-next-line no-await-in-loop
-        await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, {
-          emotion: hasErrors ? 'fear' : 'happy',
-          gesture: hasErrors ? 'shrug' : 'thumbup',
-          hand: hasErrors ? 'both' : 'right',
-        });
-      }
-
-      const refreshedPrompt = rebuildPrompt(userText);
-      nextPromptAfterTools = [
-        refreshedPrompt,
-        '',
-        `--- TURN ${turnCount} PHASE ${phaseId} TOOL RESULTS ---`,
-        buildToolResultPrompt(combinedResults, userText),
-      ].join('\n\n');
-      shouldContinueLoop = true;
-      break;
-    }
-
-    if (shouldContinueLoop) {
-      currentPrompt = nextPromptAfterTools || rebuildPrompt(userText);
-      continue;
-    }
-
-    lastResponse = turn.response || lastResponse;
-    break;
-  }
-
-  if (turnCount >= MAX_AGENT_TURNS) {
-    emitSystemChatStream(requestId, `Agent loop: massimo ${MAX_AGENT_TURNS} turni raggiunto.`);
-  }
-
-  return { cancelled: false, completed: false, lastResponse, turns: turnCount, toolResults: allToolResults };
-}
-
-async function startDirectAcpRequest(requestId, userText) {
-  resetBrowserAgentState();
-  const selectedBrain = getSelectedBrainOption();
-
-  if (!hasSelectedBrainLauncher()) {
-    const errorMessage = {
-      id: createMessageId('system'),
-      role: 'system',
-      text: `ACP non disponibile: launcher ${selectedBrain.label} non trovato (${selectedBrain.commandPath}).`,
-      ts: new Date().toISOString(),
-    };
-    appendHistoryMessage(errorMessage);
-    emitChatStream({ type: 'error', requestId, error: errorMessage.text, message: errorMessage });
-    setStatus('error');
-    setBrainMode('direct-acp-missing');
-    setStreamStatus(STREAM_STATUS.DISCONNECTED);
-    setTtsState('error', { error: errorMessage.text });
-    return;
-  }
-
-  await refreshComputerState().catch(() => null);
-  const prompt = buildDirectAcpPrompt(userText);
-  const sessionInfo = prepareAcpSessionTurn();
-  const launch = await getBrainSpawnConfig(prompt, sessionInfo);
-  
-  activeResponseId = requestId;
-
-  setStatus('thinking');
-  setBrainMode('direct-acp-streaming');
-  setStreamStatus(STREAM_STATUS.WAIT);
-  sendAvatarCommand({ cmd: 'expression', expression: 'think' });
-  sendAvatarCommand({ cmd: 'gesture', gesture: 'index', duration: 6 });
-  emitChatStream({ type: 'started', requestId });
-
-  try {
-    const result = await agentLoop(requestId, userText, prompt, sessionInfo, {
-      rebuildPrompt: buildDirectAcpPrompt,
-      streamPreview: launch.kind !== 'ollama-http',
-      strictJson: true,
-    });
-
-    if (result.cancelled) {
-      activeResponseId = null;
-      setStatus('idle');
-      setBrainMode('direct-acp-ready');
-      setStreamStatus(STREAM_STATUS.CONNECTED);
-      return;
-    }
-
-    const finalSessionId = activeChatRequest?.acpSessionId || sessionInfo.id;
-    if (activeChatRequest?.id === requestId) {
-      activeChatRequest.streamEmitter?.stop();
-      activeChatRequest = null;
-    }
-    markAcpSessionTurnCompleted(finalSessionId);
-    consumeStartupBootPrompt();
-    setStatus('idle');
-    setBrainMode('direct-acp-ready');
-    setStreamStatus(STREAM_STATUS.CONNECTED);
-  } catch (error) {
-    const active = activeChatRequest;
-    const cancelled = Boolean(active?.cancelled);
-    const stopReason = active?.stopReason;
-    const acpSessionId = active?.acpSessionId || sessionInfo.id;
-    const acpSessionNew = Boolean(active?.acpSessionNew ?? sessionInfo.isNew);
-
-    if (active?.id === requestId) {
-      active.streamEmitter?.stop();
-      activeChatRequest = null;
-    }
-
-    if (cancelled) {
-      if (acpSessionNew) {
-        resetAcpSession(acpSessionId);
-      }
-      activeResponseId = null;
-      const systemMessage = {
-        id: createMessageId('system'),
-        role: 'system',
-        text: stopReason === 'timeout' ? 'Risposta interrotta per timeout.' : 'Risposta interrotta.',
-        ts: new Date().toISOString(),
-      };
-      appendHistoryMessage(systemMessage);
-      emitChatStream({ type: 'stopped', requestId, message: systemMessage });
-      setStatus('idle');
-      setBrainMode('direct-acp-ready');
-      setStreamStatus(stopReason === 'timeout' ? STREAM_STATUS.TIMEOUT : STREAM_STATUS.CONNECTED);
-      setTtsState('idle', { error: null });
-      return;
-    }
-
-    activeResponseId = null;
-    const systemMessage = {
-      id: createMessageId('system'),
-      role: 'system',
-      text: error.message || 'Errore ACP diretto',
-      ts: new Date().toISOString(),
-    };
-    appendHistoryMessage(systemMessage);
-    emitChatStream({ type: 'error', requestId, error: systemMessage.text, message: systemMessage });
-    setStatus('error');
-    setBrainMode('direct-acp-error');
-    setStreamStatus(STREAM_STATUS.ERROR);
-    setTtsState('error', { error: systemMessage.text });
-  }
-}
-
-async function startBootstrapAcpRequest(requestId, userText, options = {}) {
-  resetBrowserAgentState();
-  const selectedBrain = getSelectedBrainOption();
-
-  if (!hasSelectedBrainLauncher()) {
-    const errorMessage = {
-      id: createMessageId('system'),
-      role: 'system',
-      text: `ACP non disponibile: launcher ${selectedBrain.label} non trovato (${selectedBrain.commandPath}).`,
-      ts: new Date().toISOString(),
-    };
-    appendHistoryMessage(errorMessage);
-    emitChatStream({ type: 'error', requestId, error: errorMessage.text, message: errorMessage });
-    setStatus('error');
-    setBrainMode('direct-acp-missing');
-    setStreamStatus(STREAM_STATUS.DISCONNECTED);
-    setTtsState('error', { error: errorMessage.text });
-    return;
-  }
-
-  const sessionInfo = prepareAcpSessionTurn();
-  activeChatRequest = {
-    id: requestId,
-    proc: null,
-    cancelled: false,
-    stopReason: null,
-    buffer: '',
-    preview: '',
-    acpSessionId: sessionInfo.id,
-    acpSessionNew: sessionInfo.isNew,
-    streamEmitter: createStreamEmitter(requestId),
-  };
-  activeResponseId = requestId;
-
-  setStatus('thinking');
-  setBrainMode('direct-acp-bootstrap');
-  setStreamStatus(STREAM_STATUS.WAIT);
-  sendAvatarCommand({ cmd: 'expression', expression: 'think' });
-  emitChatStream({ type: 'started', requestId });
-
-  try {
-    const prompt = buildBootstrapAcpPrompt(userText, options);
-    const turn = await runAcpTurn(requestId, prompt, userText, sessionInfo, { streamPreview: true, strictJson: true });
-
-    if (activeChatRequest?.id === requestId) {
-      activeChatRequest.streamEmitter?.stop();
-      activeChatRequest = null;
-    }
-
-    updateBootstrapStateFromAcp(bootstrapState, turn.response.reasoning, options);
-
-    await finalizeParsedAssistantReply(
-      requestId,
-      userText,
-      turn.response,
-      { id: sessionInfo.id },
-      {
-        consumeStartupBoot: false,
-        messageMeta: { bootstrap: true },
-      },
-    );
-  } catch (error) {
-    if (activeChatRequest?.id === requestId) {
-      activeChatRequest.streamEmitter?.stop();
-      activeChatRequest = null;
-    }
-
-    activeResponseId = null;
-    const wasTimeout = /timeout/i.test(error?.message || '') || error?.code === 'timeout';
-    const wasCancelled = /cancelled|user-stop/i.test(error?.message || '') || error?.code === 'user-stop';
-
-    if (sessionInfo.isNew) {
-      resetAcpSession(sessionInfo.id);
-    }
-
-    const systemMessage = {
-      id: createMessageId('system'),
-      role: 'system',
-      text: wasCancelled
-        ? 'Bootstrap interrotto.'
-        : (wasTimeout ? 'Bootstrap interrotto per timeout.' : (error?.message || 'Errore nel bootstrap ACP')),
-      ts: new Date().toISOString(),
-    };
-
-    appendHistoryMessage(systemMessage);
-    emitChatStream({
-      type: wasCancelled ? 'stopped' : 'error',
-      requestId,
-      error: wasCancelled ? undefined : systemMessage.text,
-      message: systemMessage,
-    });
-    setStatus(wasCancelled ? 'idle' : 'error');
-    setBrainMode(wasCancelled ? 'direct-acp-ready' : 'direct-acp-error');
-    setStreamStatus(wasCancelled ? STREAM_STATUS.CONNECTED : (wasTimeout ? STREAM_STATUS.TIMEOUT : STREAM_STATUS.ERROR));
-    setTtsState(wasCancelled ? 'idle' : 'error', { error: wasCancelled ? null : systemMessage.text });
-  }
-}
 
 function reportDetachedAsyncError(context, error, requestId = null) {
   const detail = normalizeLine(error?.message || String(error || context), 400);
@@ -8257,7 +5522,10 @@ app.whenReady().then(() => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const responseHeaders = { ...(details.responseHeaders || {}) };
     if (isTrustedAppUrl(details.url)) {
-      responseHeaders['Content-Security-Policy'] = [buildRendererCsp({ isDev })];
+      responseHeaders['Content-Security-Policy'] = [buildRendererCsp({
+        isDev,
+        allowUnsafeEval: String(details.url || '').includes('/talkinghead/'),
+      })];
     }
     callback({ responseHeaders });
   });
@@ -8462,11 +5730,11 @@ app.whenReady().then(() => {
     if (isBootstrapTurn) {
       if (!bootstrapState.active) {
         startBootstrapWizard();
-        void startBootstrapAcpRequest(requestId, trimmed, { mode: 'start' }).catch((error) => {
+        void orchestrator.startBootstrapAcpRequest(requestId, trimmed, { mode: 'start' }).catch((error) => {
           reportDetachedAsyncError('startBootstrapAcpRequest:start', error, requestId);
         });
       } else {
-        void startBootstrapAcpRequest(requestId, trimmed, { mode: 'answer' }).catch((error) => {
+        void orchestrator.startBootstrapAcpRequest(requestId, trimmed, { mode: 'answer' }).catch((error) => {
           reportDetachedAsyncError('startBootstrapAcpRequest:answer', error, requestId);
         });
       }
@@ -8479,7 +5747,7 @@ app.whenReady().then(() => {
       };
     }
 
-    void startDirectAcpRequest(requestId, trimmed).catch((error) => {
+    void orchestrator.startDirectAcpRequest(requestId, trimmed).catch((error) => {
       reportDetachedAsyncError('startDirectAcpRequest', error, requestId);
     });
 

@@ -243,7 +243,7 @@ async function testChatFunctionalWithAvatar() {
     assert(value === 'Ciao', `Expected textarea to contain 'Ciao', got: '${value}'`);
 
     // Verify the send button exists and is interactive
-    const sendButton = chatWindow.locator('button[aria-label*="Invia"]');
+    const sendButton = chatWindow.locator('button[aria-label="Send message"]');
     const sendVisible = await sendButton.isVisible().catch(() => false);
     assert(sendVisible, 'Send button should be visible');
 
@@ -266,10 +266,13 @@ async function testAvatarStatusBubbleInfrastructure() {
     const bridgePath = path.resolve(__dirname, '..', 'electron', 'avatar-window-bridge.js');
     const content = require('fs').readFileSync(bridgePath, 'utf8');
 
-    assert(content.includes('handleStatus'), 'Bridge should handle status commands');
-    assert(content.includes('showStatusBubble'), 'Bridge should show status bubble');
-    assert(content.includes('hideStatusBubble'), 'Bridge should hide status bubble');
-    assert(content.includes('nyx-status-bubble'), 'Bridge should use status bubble element ID');
+    const pageHandlerPath = path.resolve(__dirname, '..', 'electron', 'avatar-page-handler.js');
+    const pageHandlerContent = require('fs').readFileSync(pageHandlerPath, 'utf8');
+
+    assert(pageHandlerContent.includes('handleStatus'), 'Page handler should handle status commands');
+    assert(pageHandlerContent.includes('showBubble'), 'Page handler should show status bubble');
+    assert(pageHandlerContent.includes('hideBubble'), 'Page handler should hide status bubble');
+    assert(pageHandlerContent.includes('nyx-status-bubble'), 'Page handler should use status bubble element ID');
 
     console.log('  PASS: Avatar status bubble infrastructure verified');
   } finally {
@@ -282,17 +285,15 @@ async function testAvatarCommandContract() {
   console.log('TEST: Avatar command contract');
 
   const fs = require('fs');
-  const adapterPath = path.resolve(__dirname, '..', 'src', 'avatar-runtime', 'adapter.js');
-  const adapterContent = fs.readFileSync(adapterPath, 'utf8');
-  const nyxAvatarPath = path.resolve(__dirname, '..', 'src', 'components', 'NyxAvatar.jsx');
-  const componentContent = fs.readFileSync(nyxAvatarPath, 'utf8');
+  const pageHandlerPath = path.resolve(__dirname, '..', 'electron', 'avatar-page-handler.js');
+  const pageHandlerContent = fs.readFileSync(pageHandlerPath, 'utf8');
 
-  // Commands handled by the adapter (runtime control)
+  // Commands handled by the page-side runtime control.
   const adapterCommands = [
-    { key: 'speak', pattern: /buildSpeakScript|speak\s*\(/ },
-    { key: 'stop', pattern: /buildStopScript|\.stop\s*\(/ },
-    { key: 'mood', pattern: /buildMoodScript|setMood\s*\(/ },
-    { key: 'gesture', pattern: /buildGestureScript|playGesture\s*\(/ },
+    { key: 'speak', pattern: /function\s+handleSpeak|case\s+['"]speak['"]/ },
+    { key: 'stop', pattern: /function\s+handleStop|case\s+['"]stop['"]/ },
+    { key: 'mood', pattern: /function\s+handleMood|case\s+['"]mood['"]/ },
+    { key: 'gesture', pattern: /function\s+handleGesture|case\s+['"]gesture['"]/ },
   ];
 
   // Commands handled by the component (UI-only, no runtime JS needed)
@@ -301,24 +302,17 @@ async function testAvatarCommandContract() {
   ];
 
   for (const cmd of adapterCommands) {
-    assert(cmd.pattern.test(adapterContent),
-      `Adapter should handle '${cmd.key}' command`);
+    assert(cmd.pattern.test(pageHandlerContent),
+      `Page handler should handle '${cmd.key}' command`);
   }
 
   for (const cmd of componentCommands) {
-    assert(cmd.pattern.test(componentContent),
-      `Component should handle '${cmd.key}' command`);
+    assert(cmd.pattern.test(pageHandlerContent),
+      `Page handler should handle '${cmd.key}' command`);
   }
 
-  // Verify executeJavaScript is used in the adapter (not directly in component)
-  assert(adapterContent.includes('executeJavaScript'),
-    'AvatarRuntimeAdapter should use executeJavaScript for avatar control');
-
-  // Verify the component imports and uses the adapter
-  assert(componentContent.includes('AvatarRuntimeAdapter'),
-    'NyxAvatar should import and use AvatarRuntimeAdapter');
-  assert(componentContent.includes('adapterRef'),
-    'NyxAvatar should have adapterRef for delegation');
+  assert(pageHandlerContent.includes("window.addEventListener('__nyx_cmd__'"),
+    'Page handler should subscribe to bridged avatar commands');
 
   // ─── Typed IPC channels in preload ─────────────────────────────────────
   const preloadPath = path.resolve(__dirname, '..', 'electron', 'preload.js');
@@ -360,11 +354,8 @@ async function testAvatarCommandContract() {
   const bridgeContent = fs.readFileSync(bridgePath, 'utf8');
 
   assert(bridgeContent.includes('ipcRenderer.on'), 'Bridge should listen for IPC commands');
-  assert(bridgeContent.includes('handleSpeak'), 'Bridge should handle speak');
-  assert(bridgeContent.includes('handleStop'), 'Bridge should handle stop');
-  assert(bridgeContent.includes('handleMood'), 'Bridge should handle mood');
-  assert(bridgeContent.includes('handleGesture'), 'Bridge should handle gesture');
-  assert(bridgeContent.includes('handleStatus'), 'Bridge should handle status');
+  assert(bridgeContent.includes("__nyx_cmd__"), 'Bridge should relay commands to the page handler');
+  assert(bridgeContent.includes('notifyPlayback'), 'Bridge should expose playback notification');
 
   // Verify no webviewTag in window-manager
   const wmPath = path.resolve(__dirname, '..', 'electron', 'window-manager.js');
@@ -379,22 +370,16 @@ async function testAvatarPlaybackNotification() {
   console.log('TEST: Avatar playback notification infrastructure');
 
   const fs = require('fs');
-  const nyxAvatarPath = path.resolve(__dirname, '..', 'src', 'components', 'NyxAvatar.jsx');
-  const content = fs.readFileSync(nyxAvatarPath, 'utf8');
 
-  // Verify notifyAvatarPlayback is used
-  assert(content.includes('notifyAvatarPlayback'),
-    'NyxAvatar should call notifyAvatarPlayback');
+  const bridgePath = path.resolve(__dirname, '..', 'electron', 'avatar-window-bridge.js');
+  const bridgeContent = fs.readFileSync(bridgePath, 'utf8');
+  assert(bridgeContent.includes('notifyPlayback'),
+    'Avatar bridge should expose notifyPlayback');
 
-  // Verify the electronAPI is called for playback
-  assert(content.includes('notifyAvatarPlayback'),
-    'NyxAvatar should have playback notification function');
-
-  // Verify the preload exposes the notification API
-  const preloadPath = path.resolve(__dirname, '..', 'electron', 'preload.js');
-  const preloadContent = fs.readFileSync(preloadPath, 'utf8');
-  assert(preloadContent.includes('notifyAvatarPlayback'),
-    'Preload should expose notifyAvatarPlayback');
+  const pageHandlerPath = path.resolve(__dirname, '..', 'electron', 'avatar-page-handler.js');
+  const pageHandlerContent = fs.readFileSync(pageHandlerPath, 'utf8');
+  assert(pageHandlerContent.includes('__nyxBridge') && pageHandlerContent.includes('notifyPlayback'),
+    'Page handler should notify playback through the bridge');
 
   // Verify main process handles it
   const mainPath = path.resolve(__dirname, '..', 'electron', 'main.js');
@@ -418,12 +403,8 @@ async function testMultipleWindowsCoexist() {
 
     // Wait for avatar window
     await waitForWindow(async (w) => {
-      try {
-        const title = await w.title();
-        return title.includes('Avatar') || (await w.locator('webview').count()) > 0;
-      } catch {
-        return false;
-      }
+      const title = await w.title();
+      return title.includes('Avatar') || title.includes('Talking Head') || w.url().includes('/talkinghead/index.html');
     }, electronApp);
 
     // Verify at least 2 windows exist
@@ -459,9 +440,12 @@ async function testAvatarWebviewSecurity() {
     assert(!wmContent.includes('will-attach-webview') || wmContent.includes('// will-attach-webview'),
       'Avatar window should not have will-attach-webview handler');
 
-    // Verify contextIsolation: false for avatar window (needed to access window.head)
-    assert(wmContent.includes('contextIsolation: false'),
-      'Avatar window should have contextIsolation: false to access window.head directly');
+    // app.enableSandbox() forces contextIsolation: true; page-world access is done by
+    // injecting avatar-page-handler.js after load.
+    assert(wmContent.includes('contextIsolation: true'),
+      'Avatar window should keep contextIsolation enabled');
+    assert(wmContent.includes('avatar-page-handler.js'),
+      'Avatar page handler should be injected into the page world');
 
     console.log('  PASS: Avatar window security configuration verified');
   } finally {

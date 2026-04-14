@@ -29,9 +29,9 @@ const QWEN_CLI_JS_PATH = path.join(APP_DATA_NPM, 'node_modules', '@qwen-code', '
 const PINCHTAB_PS1_PATH = path.join(APP_DATA_NPM, 'pinchtab.ps1');
 const PINCHTAB_CLI_PATH = path.join(APP_DATA_NPM, 'node_modules', 'pinchtab', 'bin', 'pinchtab');
 
-const AGENT_ROUTER_ROOT = env('NYX_AGENT_ROUTER_ROOT', path.join(process.env.USERPROFILE || '', 'Desktop', 'mpc-kalysenza docker'));
-const AGENT_ROUTER_PATH = path.join(AGENT_ROUTER_ROOT, 'agent_router.py');
-const AGENT_MODELS_CONFIG_PATH = path.join(AGENT_ROUTER_ROOT, 'agent_models_config.json');
+const AGENT_ROUTER_ROOT = env('NYX_AGENT_ROUTER_ROOT', '');
+const AGENT_ROUTER_PATH = AGENT_ROUTER_ROOT ? path.join(AGENT_ROUTER_ROOT, 'agent_router.py') : '';
+const AGENT_MODELS_CONFIG_PATH = AGENT_ROUTER_ROOT ? path.join(AGENT_ROUTER_ROOT, 'agent_models_config.json') : '';
 
 const KOKORO_SERVER_SCRIPT = path.join(__dirname, '..', 'electron', 'kokoro_tts_server.py');
 
@@ -270,6 +270,22 @@ const STREAM_EMITTER_EMA_ALPHA = 0.8;
 // ============================================================
 
 const REASONING_TAG_NAMES = ['think', 'thought', 'reasoning', 'analysis', 'internal', 'plan'];
+
+const EMOTION_TO_AVATAR_STYLE = {
+  happy: { mood: 'happy', expression: 'happy', motion: null, motionType: null },
+  sad: { mood: 'sad', expression: 'sad', motion: 'sitting', motionType: 'pose' },
+  angry: { mood: 'angry', expression: 'angry', motion: 'side', motionType: 'pose' },
+  think: { mood: 'think', expression: 'think', motion: null, motionType: null },
+  surprised: { mood: 'surprised', expression: 'surprised', motion: 'surprised_hands', motionType: 'gesture' },
+  awkward: { mood: 'neutral', expression: 'neutral', motion: null, motionType: null },
+  question: { mood: 'curious', expression: 'think', motion: null, motionType: null },
+  curious: { mood: 'curious', expression: 'curious', motion: null, motionType: null },
+  neutral: { mood: 'neutral', expression: 'neutral', motion: null, motionType: null },
+  fear: { mood: 'fear', expression: 'fear', motion: 'side', motionType: 'pose' },
+  disgust: { mood: 'disgust', expression: 'disgust', motion: 'side', motionType: 'pose' },
+  love: { mood: 'love', expression: 'happy', motion: null, motionType: null },
+  sleep: { mood: 'sleep', expression: 'sleep', motion: 'sitting', motionType: 'pose' },
+};
 
 // ============================================================
 // Stream status
@@ -668,6 +684,7 @@ module.exports = {
 
   // Reasoning
   REASONING_TAG_NAMES,
+  EMOTION_TO_AVATAR_STYLE,
 
   // Stream status
   STREAM_STATUS,

@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { AvatarRuntimeAdapter } from '../avatar-runtime/adapter';
 
+/** Extra buffer after audio ends to ensure playback settles before notifying. */
+const PLAYBACK_END_BUFFER_MS = 180;
+
 function NyxAvatar() {
   const prefersReducedMotion = useReducedMotion();
   const webviewRef = useRef(null);
@@ -124,7 +127,7 @@ function NyxAvatar() {
             playbackRef.current.timerId = null;
             playbackRef.current.requestId = null;
             playbackRef.current.segmentId = null;
-          }, playbackDurationMs + 180);
+          }, playbackDurationMs + PLAYBACK_END_BUFFER_MS);
           break;
         }
 

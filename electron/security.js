@@ -60,6 +60,33 @@ function assertTrustedIpcSender(event, channel) {
   return senderUrl;
 }
 
+/**
+ * Check if the IPC sender is the Chat screen.
+ */
+function isChatScreenSender(event) {
+  const senderUrl = getSenderUrl(event);
+  if (!senderUrl) return false;
+  try {
+    const parsed = new URL(senderUrl);
+    const screen = parsed.searchParams.get('screen');
+    // If no screen is specified, we default to 'chat' for compatibility or security 
+    // depends on the default window URL. In our app, windows are always created with screen param.
+    return screen === 'chat';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Asserts that the IPC sender is the Chat screen.
+ */
+function assertChatScreenSender(event, channel) {
+  assertTrustedIpcSender(event, channel);
+  if (!isChatScreenSender(event)) {
+    throw new Error(`Unauthorized: Channel "${channel}" is restricted to the Chat screen.`);
+  }
+}
+
 function registerValidatedIpcHandler(ipcMain, channel, handler) {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrustedIpcSender(event, channel);
@@ -88,12 +115,16 @@ function createNavigationGuard() {
   };
 }
 
-function buildRendererCsp({ isDev = false } = {}) {
+function buildRendererCsp({ isDev = false, allowUnsafeEval = false } = {}) {
   const scriptSources = ["'self'", "'unsafe-inline'", 'app:', 'blob:'];
   const connectSources = ["'self'", 'app:', 'blob:'];
 
+  if (isDev || allowUnsafeEval) {
+    scriptSources.push("'unsafe-eval'");
+  }
+
   if (isDev) {
-    scriptSources.push("'unsafe-eval'", 'http://localhost:5174', 'http://127.0.0.1:5174');
+    scriptSources.push('http://localhost:5174', 'http://127.0.0.1:5174');
     connectSources.push(
       'http://localhost:5174',
       'http://127.0.0.1:5174',
@@ -124,9 +155,10 @@ module.exports = {
   createNavigationGuard,
   createPermissionRequestHandler,
   getAllowedDevOrigins,
-  getSenderUrl,
   isAllowedWebviewSource,
+  isChatScreenSender,
   isTrustedAppUrl,
+  assertChatScreenSender,
   registerValidatedIpcHandler,
   registerValidatedIpcListener,
 };

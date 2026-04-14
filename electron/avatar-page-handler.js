@@ -17,8 +17,8 @@
   var MOOD_MAP = {
     neutral: 'Neutral', happy: 'Happy', angry: 'Angry', sad: 'Sad',
     fear: 'Fear', disgust: 'Disgust', love: 'Love', sleep: 'Sleep',
-    think: 'Neutral', surprised: 'Happy', curious: 'Neutral',
-    question: 'Neutral', awkward: 'Neutral',
+    think: 'Think', surprised: 'Surprised', curious: 'Curious',
+    question: 'Curious', awkward: 'Neutral',
   };
 
   var EMOJI_TO_MOOD = {
@@ -32,10 +32,11 @@
     '\u{1F602}': 'Happy', '\u{1F923}': 'Happy', '\u{1F605}': 'Happy',
     '\u{1F609}': 'Happy', '\u{1F62D}': 'Sad', '\u{1F97A}': 'Sad',
     '\u{1F61E}': 'Sad', '\u{1F614}': 'Sad', '\u2639\uFE0F': 'Sad',
-    '\u{1F633}': 'Happy', '\u{1F61A}': 'Love', '\u{1F618}': 'Love',
+    '\u{1F633}': 'Surprised', '\u{1F61A}': 'Love', '\u{1F618}': 'Love',
     '\u{1F621}': 'Angry', '\u{1F620}': 'Angry', '\u{1F92C}': 'Angry',
-    '\u{1F631}': 'Fear', '\u{1F62C}': 'Neutral', '\u{1F644}': 'Neutral',
+    '\u{1F631}': 'Fear', '\u{1F633}': 'Surprised', '\u{1F62C}': 'Neutral', '\u{1F644}': 'Neutral',
     '\u{1F914}': 'Neutral', '\u{1F440}': 'Neutral', '\u{1F634}': 'Sleep',
+    '\u{1F62E}': 'Surprised', '\u{1F632}': 'Surprised',
   };
 
   function resolveMoodFromEmoji(text) {
@@ -134,11 +135,11 @@
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     h.audioCtx.decodeAudioData(bytes.buffer).then(function (decoded) {
       var dur = decoded.duration * 1000;
-      var vis = [], vt = [], vd = [], shapes = ['aa', 'E', 'O', 'I'];
-      for (var t = 0; t < dur - 100; t += 150) { vt.push(t); vd.push(150); vis.push(shapes[Math.floor(Math.random() * 4)]); }
-      vt.push(dur - 50); vd.push(50); vis.push('sil');
       var safe = String(data.text || '');
-      h.speakAudio({ audio: decoded, words: [safe], wtimes: [0], wdurations: [dur], visemes: vis, vtimes: vt, vdurations: vd }, { avatarMute: false });
+      // Do NOT pass visemes/vtimes/vdurations — let talkinghead.mjs calculate them
+      // automatically from the text using lipsyncPreProcessText + lipsyncWordsToVisemes
+      // for the correct language (see talkinghead.mjs lines 3157-3158).
+      h.speakAudio({ audio: decoded, words: [safe], wtimes: [0], wdurations: [dur] }, { avatarMute: false });
       if (data.requestId && data.segmentId) {
         setTimeout(function () {
           if (window.__nyxBridge) window.__nyxBridge.notifyPlayback({ requestId: data.requestId, segmentId: data.segmentId, state: 'ended' });
@@ -166,33 +167,72 @@
     var motion = String(data.motion || '').toLowerCase();
     var motionType = String(data.motionType || '').toLowerCase();
     var hand = String(data.hand || '').toLowerCase();
+    var s = window.site || {};
+    var dur = Number.isFinite(Number(data.duration)) ? data.duration : 10;
+
+    // Pre-compute lookups for all categories
+    var pk = Object.keys(s.poses || {}).find(function (k) {
+      return k.toLowerCase() === motion || String((s.poses[k] && s.poses[k].url) || '').toLowerCase() === motion;
+    });
+    var ak = Object.keys(s.animations || {}).find(function (k) {
+      return k.toLowerCase() === motion || String((s.animations[k] && s.animations[k].url) || '').toLowerCase() === motion;
+    });
+    var gk = Object.keys(s.gestures || {}).find(function (k) {
+      return k.toLowerCase() === motion || String((s.gestures[k] && s.gestures[k].name) || '').toLowerCase() === motion;
+    });
+
+    // 1. animEmojis → speakEmoji
     if (h.animEmojis && h.animEmojis[motion]) { h.speakEmoji(motion); }
-    else if (motion === 'yes' || motion === 'nod') { try { h.playGesture('yes', 3, hand === 'right'); } catch (e) {} }
-    else if (motion === 'no' || motion === 'shake') { try { h.playGesture('no', 3, hand === 'right'); } catch (e) {} }
-    else if (motionType === 'pose') {
-      var s = window.site || {};
-      var pk = Object.keys(s.poses || {}).find(function (k) { return k.toLowerCase() === motion || String((s.poses[k] && s.poses[k].url) || '').toLowerCase() === motion; });
-      if (pk) try { h.playPose(s.poses[pk].url, null, data.duration); } catch (e) {}
-    } else if (motionType === 'animation') {
-      var s2 = window.site || {};
-      var animationKey = motion === 'turnwalk' ? 'walking' : motion;
-      var ak = Object.keys(s2.animations || {}).find(function (k) {
-        return k.toLowerCase() === animationKey
-          || String((s2.animations[k] && s2.animations[k].url) || '').toLowerCase() === animationKey;
+    // 2. turnwalk → look up walking animation from site config, fallback to relative path
+    else if (motion === 'turnwalk' || motionType === 'turnwalk') {
+      var direction = String(data.direction || '').toLowerCase();
+      var walkKey = Object.keys(s.animations || {}).find(function (k) {
+        return k.toLowerCase() === 'walking' || String((s.animations[k] && s.animations[k].url) || '').toLowerCase().indexOf('walking') !== -1;
       });
-      if (h.armature && data.direction) {
-        try {
-          if (String(data.direction).toLowerCase() === 'left') h.armature.rotation.y = Math.PI / 2;
-          else if (String(data.direction).toLowerCase() === 'right') h.armature.rotation.y = -Math.PI / 2;
-        } catch (e) {}
-      }
-      if (ak) try { h.playAnimation(s2.animations[ak].url, null, data.duration); } catch (e) {}
-    } else { try { h.playGesture(motion, 3, hand === 'right'); } catch (e) {} }
+      try {
+        if (walkKey && s.animations[walkKey] && s.animations[walkKey].url) {
+          h.playAnimation(s.animations[walkKey].url, null, dur);
+        } else {
+          h.playAnimation('./animations/walking.fbx', null, dur);
+        }
+        if (h.armature) {
+          h.armature.rotation.y = direction === 'left' ? Math.PI / 2 : -Math.PI / 2;
+        }
+      } catch (e) {}
+    }
+    // 3. yes/no → head nod/shake via animEmojis (already handled above, fallback here)
+    else if (motion === 'yes' || motion === 'nod') { h.playGesture('yes', 3, hand === 'right'); }
+    else if (motion === 'no' || motion === 'shake') { h.playGesture('no', 3, hand === 'right'); }
+    // 4. motionType=pose → site.poses → playPose
+    else if (motionType === 'pose') {
+      if (pk) { try { h.playPose(s.poses[pk].url, null, dur); } catch (e) {} }
+      else { try { h.playGesture(motion, 3, hand === 'right'); } catch (e) {} }
+    }
+    // 5. motionType=animation → site.animations → playAnimation
+    else if (motionType === 'animation') {
+      if (ak) { try { h.playAnimation(s.animations[ak].url, null, dur); } catch (e) {} }
+      else { try { h.playGesture(motion, 3, hand === 'right'); } catch (e) {} }
+    }
+    // 6. motionType=gesture → site.gestures → playGesture
+    else if (motionType === 'gesture') {
+      if (gk) { try { h.playGesture(s.gestures[gk].name, 3, hand === 'right'); } catch (e) {} }
+      else { try { h.playGesture(motion, 3, hand === 'right'); } catch (e) {} }
+    }
+    // 7. No motionType → try all categories in order, then raw fallback
+    else {
+      if (ak) { try { h.playAnimation(s.animations[ak].url, null, dur); } catch (e) {} }
+      else if (pk) { try { h.playPose(s.poses[pk].url, null, dur); } catch (e) {} }
+      else if (gk) { try { h.playGesture(s.gestures[gk].name, 3, hand === 'right'); } catch (e) {} }
+      else { try { h.playGesture(motion, 3, hand === 'right'); } catch (e) {} }
+    }
   }
 
   function handleStop() {
     try { if (window.head) window.head.stopSpeaking(); } catch (e) {}
-    try { if (window.__nyxProceduralMotion) window.__nyxProceduralMotion.stop(true); } catch (e) {}
+    try {
+      var m = window.__nyxMotionInternal || window.__nyxProceduralMotion;
+      if (m && m.stop) m.stop(true);
+    } catch (e) {}
   }
 
   // ── Status bubble ─────────────────────────────────────────────────────────────

@@ -27,6 +27,7 @@ const {
   PINCHTAB_RECOVERABLE_ERROR_PATTERNS,
 } = require('./constants');
 const { normalizeLine } = require('./workspace-manager');
+const { sanitizeGenericOutput } = require('./middleware/output-sanitizer');
 
 /**
  * Normalize a URL-like string to a valid URL.

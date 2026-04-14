@@ -302,6 +302,9 @@ class TalkingHead {
       },
       'namaste': {
         'RightShoulder.rotation':{x:1.758, y:0.099, z:1.604}, 'RightArm.rotation':{x:0.862, y:-0.292, z:-0.932}, 'RightForeArm.rotation':{x:0.083, y:0.066, z:-1.791}, 'RightHand.rotation':{x:-0.52, y:-0.001, z:-0.176}, 'RightHandThumb1.rotation':{x:0.227, y:0.418, z:-0.776}, 'RightHandThumb2.rotation':{x:-0.011, y:-0.003, z:0.171}, 'RightHandThumb3.rotation':{x:-0.041, y:-0.001, z:-0.013}, 'RightHandIndex1.rotation':{x:-0.236, y:0.003, z:-0.028}, 'RightHandIndex2.rotation':{x:0.004, y:0, z:0.001}, 'RightHandIndex3.rotation':{x:0.002, y:0, z:0}, 'RightHandMiddle1.rotation':{x:-0.236, y:0.003, z:-0.028}, 'RightHandMiddle2.rotation':{x:0.004, y:0, z:0.001}, 'RightHandMiddle3.rotation':{x:0.002, y:0, z:0}, 'RightHandRing1.rotation':{x:-0.236, y:0.003, z:-0.028}, 'RightHandRing2.rotation':{x:0.004, y:0, z:0.001}, 'RightHandRing3.rotation':{x:0.002, y:0, z:0}, 'RightHandPinky1.rotation':{x:-0.236, y:0.003, z:-0.028}, 'RightHandPinky2.rotation':{x:0.004, y:0, z:0.001}, 'RightHandPinky3.rotation':{x:0.002, y:0, z:0}, 'LeftShoulder.rotation':{x:1.711, y:-0.002, z:-1.625}, 'LeftArm.rotation':{x:0.683, y:0.334, z:0.977}, 'LeftForeArm.rotation':{x:0.086, y:-0.066, z:1.843}, 'LeftHand.rotation':{x:-0.595, y:-0.229, z:0.096}, 'LeftHandThumb1.rotation':{x:0.404, y:-0.05, z:0.537}, 'LeftHandThumb2.rotation':{x:-0.02, y:0.004, z:-0.154}, 'LeftHandThumb3.rotation':{x:-0.049, y:0.002, z:-0.019}, 'LeftHandIndex1.rotation':{x:-0.113, y:-0.001, z:0.014}, 'LeftHandIndex2.rotation':{x:0.003, y:0, z:0}, 'LeftHandIndex3.rotation':{x:0.002, y:0, z:0}, 'LeftHandMiddle1.rotation':{x:-0.113, y:-0.001, z:0.014}, 'LeftHandMiddle2.rotation':{x:0.004, y:0, z:0}, 'LeftHandMiddle3.rotation':{x:0.002, y:0, z:0}, 'LeftHandRing1.rotation':{x:-0.113, y:-0.001, z:0.014}, 'LeftHandRing2.rotation':{x:0.003, y:0, z:0}, 'LeftHandRing3.rotation':{x:0.002, y:0, z:0}, 'LeftHandPinky1.rotation':{x:-0.122, y:-0.001, z:-0.057}, 'LeftHandPinky2.rotation':{x:0.012, y:0.001, z:0.07}, 'LeftHandPinky3.rotation':{x:0.002, y:0, z:0}
+      },
+      'surprised_hands': {
+        'RightShoulder.rotation':{x:[1.6,1.8,1,2], y:[0.1,0.3,1,2], z:[1.4,1.6,1,2]}, 'RightArm.rotation':{x:[1.4,1.6,1,2], y:[0.2,0.4,1,2], z:[-0.3,-0.1,1,2]}, 'RightForeArm.rotation':{x:-0.5, y:[-0.2,0.2,1,2], z:1.4}, 'RightHand.rotation':{x:-0.3, y:-0.2, z:0.1}, 'LeftShoulder.rotation':{x:[1.6,1.8,1,2], y:[-0.3,-0.1,1,2], z:[-1.6,-1.4,1,2]}, 'LeftArm.rotation':{x:[1.4,1.6,1,2], y:[-0.4,-0.2,1,2], z:[0.1,0.3,1,2]}, 'LeftForeArm.rotation':{x:-0.5, y:[0.2,0.4,1,2], z:-1.4}, 'LeftHand.rotation':{x:-0.3, y:0.2, z:-0.1}
       }
     }
 
@@ -612,6 +615,67 @@ class TalkingHead {
           { name: 'mouth', delay: 10030, dt: [], vs: {} },
           { name: 'misc', delay: 10040, dt: [], vs: {} }
         ]
+      },
+      'surprised' : {
+        baseline: { browInnerUp: 1.0, browOuterUpLeft: 0.8, browOuterUpRight: 0.8, eyeWideLeft: 1.0, eyeWideRight: 1.0, jawOpen: 0.6, mouthOpen: 0.7, mouthFunnel: 0.4, eyesLookDown: 0.05 },
+        speech: { deltaRate: 0.1, deltaPitch: 0.3, deltaVolume: 0 },
+        anims: [
+          { name: 'breathing', delay: 800, dt: [ 800,400,800 ], vs: { chestInhale: [0.6,0.6,0] } },
+          { name: 'pose', alt: [
+            { p: 0.5, delay: [3000,15000], vs: { pose: ['straight'] } },
+            { p: 0.3, delay: [3000,15000], vs: { pose: ['side'] } },
+            { delay: [2000,8000], vs: { pose: ['wide'] } },
+          ]},
+          { name: 'head',
+            idle: { delay: [50,300], dt: [ [100,2000] ], vs: { bodyRotateX: [[-0.02,0.06]], bodyRotateY: [[-0.15,0.15]], bodyRotateZ: [[-0.05,0.05]] } },
+            speaking: { dt: [ [0,800,0] ], vs: { bodyRotateX: [[-0.03,0.10,1,2]], bodyRotateY: [[-0.08,0.08]], bodyRotateZ: [[-0.06,0.06]] } }
+          },
+          this.animTemplateEyes,
+          this.animTemplateBlink,
+          { name: 'mouth', delay: [500,3000], dt: [ [80,400],[80,3000,2] ], vs : { mouthOpen: [[0.3,0.7]], mouthFunnel: [[0.2,0.5]], jawOpen: [[0.3,0.6]], mouthPucker: [[0,0.2]] } },
+          { name: 'misc', delay: [50,3000], dt: [ [50,300],[500,3000,2] ], vs : { browInnerUp: [[0.6,1.0,2]], browOuterUpLeft: [[0.5,0.8,2]], browOuterUpRight: [[0.5,0.8,2]], eyeWideLeft: [[0.7,1.0,2]], eyeWideRight: [[0.7,1.0,2]] } }
+        ]
+      },
+      'think' : {
+        baseline: { browDownLeft: 0.5, browInnerUp: 0.3, eyeSquintLeft: 0.4, eyeSquintRight: 0.3, mouthPressLeft: 0.3, mouthPressRight: 0.2, mouthRollLower: 0.2, eyesLookDown: 0.15, bodyRotateZ: 0.03 },
+        speech: { deltaRate: -0.15, deltaPitch: -0.1, deltaVolume: 0 },
+        anims: [
+          { name: 'breathing', delay: 1800, dt: [ 1400,500,1200 ], vs: { chestInhale: [0.4,0.4,0] } },
+          { name: 'pose', alt: [
+            { p: 0.5, delay: [5000,30000], vs: { pose: ['side'] } },
+            { p: 0.3, delay: [5000,30000], vs: { pose: ['straight'] } },
+            { delay: [5000,20000], vs: { pose: ['hip'] } },
+          ]},
+          { name: 'head',
+            idle: { delay: [200,800], dt: [ [300,4000] ], vs: { bodyRotateX: [[-0.03,0.08]], bodyRotateY: [[-0.15,0.1]], bodyRotateZ: [[0,0.08]] } },
+            speaking: { dt: [ [0,1200,0] ], vs: { bodyRotateX: [[-0.03,0.10,1,2]], bodyRotateY: [[-0.08,0.08]], bodyRotateZ: [[0,0.05]] } }
+          },
+          this.animTemplateEyes,
+          this.animTemplateBlink,
+          { name: 'mouth', delay: [1500,5000], dt: [ [100,500],[1500,5000,2] ], vs : { mouthPressLeft: [[0.1,0.4,2]], mouthPressRight: [[0.1,0.3,2]], mouthRollLower: [[0,0.2]], mouthPucker: [[0,0.2]] } },
+          { name: 'misc', delay: [200,5000], dt: [ [200,800],[1500,5000,2] ], vs : { browDownLeft: [[0.3,0.6,2]], browInnerUp: [[0.1,0.4,2]], eyeSquintLeft: [[0.2,0.5,2]], eyeSquintRight: [[0.1,0.4,2]] } }
+        ]
+      },
+      'curious' : {
+        baseline: { browInnerUp: 0.6, browOuterUpLeft: 0.4, browOuterUpRight: 0.2, eyeWideLeft: 0.5, eyeWideRight: 0.3, eyeSquintLeft: 0.2, mouthPucker: 0.3, mouthRollLower: 0.1, bodyRotateY: -0.08, bodyRotateZ: 0.05 },
+        speech: { deltaRate: 0.05, deltaPitch: 0.15, deltaVolume: 0 },
+        anims: [
+          { name: 'breathing', delay: 1200, dt: [ 1000,400,900 ], vs: { chestInhale: [0.5,0.5,0] } },
+          { name: 'pose', alt: [
+            { p: 0.4, delay: [4000,20000], vs: { pose: ['side'] } },
+            { p: 0.3, delay: [4000,20000], vs: { pose: ['straight'] } },
+            { p: 0.2, delay: [4000,20000], vs: { pose: ['turn'] } },
+            { delay: [3000,15000], vs: { pose: ['hip'] } },
+          ]},
+          { name: 'head',
+            idle: { delay: [100,500], dt: [ [200,3000] ], vs: { bodyRotateX: [[-0.05,0.12]], bodyRotateY: [[-0.25,0.15]], bodyRotateZ: [[0.02,0.1]] } },
+            speaking: { dt: [ [0,900,0] ], vs: { bodyRotateX: [[-0.04,0.12,1,2]], bodyRotateY: [[-0.15,0.15]], bodyRotateZ: [[0.02,0.08]] } }
+          },
+          this.animTemplateEyes,
+          this.animTemplateBlink,
+          { name: 'mouth', delay: [800,4000], dt: [ [80,400],[800,4000,2] ], vs : { mouthPucker: [[0.1,0.4,2]], mouthRollLower: [[0,0.2]], mouthFunnel: [[0,0.2]] } },
+          { name: 'misc', delay: [100,4000], dt: [ [100,500],[800,4000,2] ], vs : { browInnerUp: [[0.3,0.7,2]], browOuterUpLeft: [[0.2,0.5,2]], eyeWideLeft: [[0.2,0.6,2]], eyeWideRight: [[0.1,0.4,2]], eyeSquintLeft: [[0.1,0.3,2]], eyeSquintRight: [[0,0.2,2]] } }
+        ]
       }
     };
     this.moodName = this.opt.avatarMood || "neutral";
@@ -660,7 +724,6 @@ class TalkingHead {
       '🤬': { link:  '😠' },
       '😒': { dt: [1000,1000], rescale: [0,1], vs: { eyeContact: [0], browDownRight: [0.1], browInnerUp: [0.7], browOuterUpRight: [0.2], eyeLookInRight: [0.7], eyeLookOutLeft: [0.7], eyeSquintLeft: [1], eyeSquintRight: [0.8], eyesRotateY: [0.7], mouthFrownLeft: [1], mouthFrownRight: [1], mouthLeft: [0.2], mouthPucker: [0.5], mouthRollLower: [0.2], mouthRollUpper: [0.2], mouthShrugLower: [0.2], mouthShrugUpper: [0.2], mouthStretchLeft: [0.5] } },
 
-      '😱': { dt: [500,1500], rescale: [0,1], vs: { browInnerUp: [0.8], eyeWideLeft: [0.5], eyeWideRight: [0.5], jawOpen: [0.7], mouthFunnel: [0.5] } },
       '😬': { dt: [500,1500], rescale: [0,1], vs: { browDownLeft: [1], browDownRight: [1], browInnerUp: [1], mouthDimpleLeft: [0.5], mouthDimpleRight: [0.5], mouthLowerDownLeft: [1], mouthLowerDownRight: [1], mouthPressLeft: [0.4], mouthPressRight: [0.4], mouthPucker: [0.5], mouthSmile: [0.1], mouthSmileLeft: [0.2], mouthSmileRight: [0.2], mouthStretchLeft: [1], mouthStretchRight: [1], mouthUpperUpLeft: [1], mouthUpperUpRight: [1] } },
       '🙄': { dt: [500,1500], rescale: [0,1], vs: { browInnerUp: [0.8], eyeWideLeft: [1], eyeWideRight: [1], eyesRotateX: [-0.8], bodyRotateX: [0.15], mouthPucker: [0.5], mouthRollLower: [0.6], mouthRollUpper: [0.5], mouthShrugLower: [0], mouthSmile: [0] } },
       '🤔': { dt: [500,1500], rescale: [0,1], vs: {
@@ -673,6 +736,10 @@ class TalkingHead {
       '👀': { dt: [500,1500], rescale: [0,1], vs: { eyesRotateY: [-0.8] } },
 
       '😴': { dt: [5000,5000], rescale: [0,1], vs:{ eyeBlinkLeft: [1], eyeBlinkRight: [1], bodyRotateX: [0.2], bodyRotateZ: [0.1] } },
+
+      '😮': { dt: [300,1500], rescale: [0,1], vs: { browInnerUp: [1.0], browOuterUpLeft: [0.8], browOuterUpRight: [0.8], eyeWideLeft: [1.0], eyeWideRight: [1.0], jawOpen: [0.7], mouthOpen: [0.8], mouthFunnel: [0.5] } },
+      '😲': { link: '😮' },
+      '😱': { dt: [300,1500], rescale: [0,1], vs: { browInnerUp: [1.0], browOuterUpLeft: [0.9], browOuterUpRight: [0.9], eyeWideLeft: [1.0], eyeWideRight: [1.0], jawOpen: [0.8], mouthOpen: [0.9], mouthFunnel: [0.3], bodyRotateX: [-0.05] } },
 
       '✋': { dt: [300,2000], rescale: [0,1], vs:{ mouthSmile: [0.5], gesture: [["handup",2,true],null] } },
       '🤚': { dt: [300,2000], rescale: [0,1], vs:{ mouthSmile: [0.5], gesture: [["handup",2],null] } },

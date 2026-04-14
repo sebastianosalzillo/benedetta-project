@@ -882,7 +882,7 @@ function runMemoryGet(app, requestPath, startLine = 1, lineCount = 40) {
   const trimmedRequestPath = String(requestPath || '').trim().replace(/^[/\\]+/, '');
   if (!trimmedRequestPath) return { ok: false, error: 'Memory file not found in workspace.' };
   const workspacePath = resolveWorkspacePath(app, requestPath);
-  if (!workspacePath) return { ok: false, error: 'Path is outside the workspace.' };
+  if (!workspacePath) return { ok: false, error: 'Path fuori dal workspace.' };
   const { resolved, workspaceRoot } = workspacePath;
   if (!fs.existsSync(resolved)) return { ok: false, error: 'Memory file not found in workspace.' };
 

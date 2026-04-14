@@ -97,7 +97,7 @@ function subscribe(channel, callback, mapData = (data) => data) {
 const rendererScreen = new URLSearchParams(window.location.search).get('screen') || 'chat';
 const enableRendererDevTools = process.env.NYX_ENABLE_RENDERER_DEVTOOLS === '1';
 
-const developmentOnlyBridge = enableRendererDevTools
+const developmentOnlyBridge = (enableRendererDevTools && rendererScreen === 'chat')
   ? {
       shellRun: (command, options) => ipcRenderer.invoke('shell:run', command, options),
       shellStop: (processId) => ipcRenderer.invoke('shell:stop', processId),
@@ -127,12 +127,11 @@ const developmentOnlyBridge = enableRendererDevTools
 
 const screenBridge = rendererScreen === 'avatar'
   ? {
-      // Typed avatar command channels — preferred over generic avatar:command
+      // Avatar-specific commands
       sendAvatarSpeak: (payload) => ipcRenderer.invoke('avatar:speak', payload),
       sendAvatarStop: () => ipcRenderer.invoke('avatar:stop'),
       sendAvatarSetMood: (payload) => ipcRenderer.invoke('avatar:set-mood', payload),
       sendAvatarPlayMotion: (payload) => ipcRenderer.invoke('avatar:play-motion', payload),
-      // Legacy generic channel — still available during migration
       sendAvatarCommand: (command) => ipcRenderer.invoke('avatar:command', command),
       notifyAvatarPlayback: (payload) => ipcRenderer.send('avatar:playback', payload),
       onAvatarCommand: (callback) => subscribe('avatar-command', callback),
@@ -140,6 +139,7 @@ const screenBridge = rendererScreen === 'avatar'
     }
   : rendererScreen === 'canvas'
     ? {
+        // Canvas-specific commands
         getCanvasState: () => ipcRenderer.invoke('canvas:get-state'),
         closeCanvas: () => ipcRenderer.invoke('canvas:close'),
         setCanvasLayout: (layout) => ipcRenderer.invoke('canvas:set-layout', layout),
@@ -147,6 +147,7 @@ const screenBridge = rendererScreen === 'avatar'
         onAvatarStatus: (callback) => subscribe('avatar-status', callback),
       }
     : {
+        // Chat / Main Bridge access
         sendChatMessage: (text) => ipcRenderer.invoke('chat:send', text),
         stopChatMessage: () => ipcRenderer.invoke('chat:stop'),
         setWindowAlwaysOnTop: (target, enabled) => ipcRenderer.invoke('window:set-always-on-top', target, enabled),
@@ -174,47 +175,10 @@ const screenBridge = rendererScreen === 'avatar'
 
 /**
  * Electron API exposed to renderer processes.
- * @type {ElectronAPI}
  */
 contextBridge.exposeInMainWorld('electronAPI', {
-  /**
-   * Send a chat message.
-   * @param {string} text - The message text
-   * @returns {Promise} Response from main process
-   */
   ...screenBridge,
-  /**
-   * Stop the current chat message.
-   * @returns {Promise} Response from main process
-   */
+  ...developmentOnlyBridge,
   rendererScreen,
   devToolsEnabled: enableRendererDevTools,
-  /**
-   * Select the active brain implementation.
-   * @param {string} brainId - Brain identifier
-   * @returns {IpcInvokeResult}
-   */
-  /**
-   * Update Ollama runtime configuration.
-   * @param {Object} config - Ollama config payload
-   * @returns {IpcInvokeResult}
-   */
-  /**
-   * Test a configured brain.
-   * @param {string} brainId - Brain identifier
-   * @returns {IpcInvokeResult}
-   */
-  /**
-   * Open the workspace folder in the OS file manager.
-   * @returns {IpcInvokeResult}
-   */
-  /**
-   * Complete workspace bootstrap/setup.
-   * @returns {IpcInvokeResult}
-   */
-  /**
-   * Read chat history.
-   * @returns {Promise<Array>}
-   */
-  ...developmentOnlyBridge,
 });

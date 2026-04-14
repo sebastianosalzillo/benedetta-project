@@ -19,10 +19,10 @@ const MOOD_MAP = {
   disgust: 'Disgust',
   love: 'Love',
   sleep: 'Sleep',
-  think: 'Neutral',
-  surprised: 'Happy',
-  curious: 'Neutral',
-  question: 'Neutral',
+  think: 'Think',
+  surprised: 'Surprised',
+  curious: 'Curious',
+  question: 'Curious',
   awkward: 'Neutral',
 };
 
@@ -64,11 +64,14 @@ const EMOJI_TO_MOOD = {
   '\u{1F620}': 'Angry',
   '\u{1F92C}': 'Angry',
   '\u{1F631}': 'Fear',
+  '\u{1F633}': 'Surprised',
   '\u{1F62C}': 'Neutral',
   '\u{1F644}': 'Neutral',
   '\u{1F914}': 'Neutral',
   '\u{1F440}': 'Neutral',
   '\u{1F634}': 'Sleep',
+  '\u{1F62E}': 'Surprised',
+  '\u{1F632}': 'Surprised',
 };
 
 /**
@@ -221,26 +224,43 @@ export function buildProceduralMotionScript(baseOffsetX = 0) {
         _state.rafId = requestAnimationFrame(tick);
       }
 
-      // Alias for the legacy window.__nyxProceduralMotion name
-      // so existing gesture scripts that reference it still work,
-      // but they only get a read-only proxy — no raw state access.
+      // ─── DEPRECATED: window.__nyxProceduralMotion (legacy compatibility proxy)
+      // All new code should use window.__nyxMotionInternal instead.
+      // This proxy exists ONLY for backward compatibility with external scripts
+      // that may reference the old API. It will be removed in a future release.
+      // @deprecated Use window.__nyxMotionInternal directly.
       if (!window.__nyxProceduralMotion) {
         window.__nyxProceduralMotion = {
+          // @deprecated — use __nyxMotionInternal.getOffsetX()
           get currentOffsetX() { return window.__nyxMotionInternal.getOffsetX(); },
+          // @deprecated — use __nyxMotionInternal.setOffsetX(val)
           set currentOffsetX(val) { window.__nyxMotionInternal.setOffsetX(val); },
+          // @deprecated — use __nyxMotionInternal.getActiveRunId()
           get activeRunId() { return window.__nyxMotionInternal.getActiveRunId(); },
-          set activeRunId(val) { /* ignored — managed internally */ },
+          // @deprecated — writes are silently ignored (activeRunId is managed internally)
+          set activeRunId(_val) { /* ignored — managed internally */ },
+          // @deprecated — static fields are no longer synced
           timers: [],
           rafId: null,
           baseCameraPosition: null,
           baseControlsTarget: null,
+          // @deprecated — use __nyxMotionInternal.clear()
           clear: function() { window.__nyxMotionInternal.clear(); },
+          // @deprecated — use __nyxMotionInternal.stop(keep)
           stop: function(keep) { return window.__nyxMotionInternal.stop(keep); },
+          // @deprecated — use __nyxMotionInternal.getBounds()
           getBounds: function() { return window.__nyxMotionInternal.getBounds(); },
+          // @deprecated — use __nyxMotionInternal.captureCameraLock()
           captureCameraLock: function() { window.__nyxMotionInternal.captureCameraLock(); },
+          // @deprecated — use __nyxMotionInternal.lockCamera()
           lockCamera: function() { window.__nyxMotionInternal.lockCamera(); },
+          // @deprecated — use __nyxMotionInternal.clampOffsetX(v)
           clampOffsetX: function(v) { return _clampOffsetX(v); },
         };
+        // Mark as deprecated for runtime detection
+        window.__nyxProceduralMotion._deprecated = true;
+        // Log deprecation warning once
+        console.warn('[nyx-motion] __nyxProceduralMotion is deprecated. Use __nyxMotionInternal instead.');
       }
     })();
   `;
@@ -335,29 +355,13 @@ export function buildSpeakScript({ text, audioBase64, mood, expression, requestI
 
       const decodedAudio = await h.audioCtx.decodeAudioData(bytes.buffer);
       const durationMs = decodedAudio.duration * 1000;
-      const visemes = [];
-      const vtimes = [];
-      const vdurations = [];
-      const shapes = ['aa', 'E', 'O', 'I'];
-
-      for (let t = 0; t < durationMs - 100; t += 150) {
-        vtimes.push(t);
-        vdurations.push(150);
-        visemes.push(shapes[Math.floor(Math.random() * shapes.length)]);
-      }
-
-      vtimes.push(durationMs - 50);
-      vdurations.push(50);
-      visemes.push('sil');
-
+      // Do NOT pass visemes/vtimes/vdurations — let talkinghead.mjs calculate them
+      // automatically from the text using lipsyncPreProcessText + lipsyncWordsToVisemes.
       h.speakAudio({
         audio: decodedAudio,
         words: [\`${safeText}\`],
         wtimes: [0],
         wdurations: [durationMs],
-        visemes,
-        vtimes,
-        vdurations,
       }, { avatarMute: false });
 
       return durationMs;
@@ -410,7 +414,7 @@ export function buildGestureScript({ motion, motionType, hand, direction, durati
       const direction = '${directionValue}';
       const dur = ${dur};
       const procedural = window.__nyxMotionInternal || window.__nyxProceduralMotion || null;
-      const bilateralGestures = new Set(['namaste', 'shrug']);
+      const bilateralGestures = new Set(['namaste', 'shrug', 'surprised_hands']);
       const playGestureWithHand = (name) => {
         if (!name) return;
 
