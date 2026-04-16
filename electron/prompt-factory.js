@@ -18,16 +18,17 @@ const {
   getBootstrapInitialPrompt,
   buildBootstrapAnswersPrompt,
 } = require('./workspace-manager');
+const { buildProjectContextPrompt, buildMemoryContextPrompt } = require('./project-context');
 
 const SYSTEM_PROMPT_TEMPLATE = fs.readFileSync(path.join(__dirname, 'prompts', 'system_prompt.md'), 'utf-8');
 const BOOTSTRAP_PROMPT_TEMPLATE = fs.readFileSync(path.join(__dirname, 'prompts', 'bootstrap_prompt.md'), 'utf-8');
 
-function buildDirectAcpPrompt(userText, context = {}) {
-  const { 
+function buildDirectAgentPrompt(userText, context = {}) {
+  const {
     app = null,
-    chatHistory = [], 
-    nyxMemory = {}, 
-    acpSession = {}, 
+    chatHistory = [],
+    nyxMemory = {},
+    agentSession = {},
     personalityState = {},
     getPersonalityPrompt,
     buildBrowserStatePrompt: buildBrowserStatePromptCtx,
@@ -40,7 +41,7 @@ function buildDirectAcpPrompt(userText, context = {}) {
 
   const normalizedUserText = String(userText || '').trim();
   const promptHistory = chatHistory.filter((item) => item.role !== 'system');
-  
+
   const historyBlock = promptHistory
     .slice(-MAX_INITIAL_PROMPT_HISTORY)
     .map((item) => `${item.role.toUpperCase()}: ${normalizeLine(item.text, 180)}`)
@@ -58,15 +59,9 @@ function buildDirectAcpPrompt(userText, context = {}) {
   const computerBlock = buildComputerStatePrompt({ computerState });
   const sessionContextBlock = buildCurrentSessionContextPrompt(context);
   const memoryFileName = getWorkspaceMemoryFileName(app);
-  
-  const workspaceBlock = wmBuildWorkspaceProjectContextPrompt(app, [
-    ...WORKSPACE_REQUIRED_FILES,
-    fs.existsSync(getWorkspaceFilePath(app, 'BOOTSTRAP.md')) ? 'BOOTSTRAP.md' : '',
-    memoryFileName,
-  ].filter(Boolean), {
-    title: 'PROJECT_CONTEXT',
-    includeMissingMarkers: true,
-  });
+
+  const projectContextBlock = buildProjectContextPrompt(app, { privateSession: true });
+  const memoryContextBlock = buildMemoryContextPrompt(app, { privateSession: true });
 
   const startupBootBlock = buildStartupBootPrompt(context);
   const dailyMemoryBlock = wmBuildRecentDailyMemoryPrompt(app, 2);
@@ -74,39 +69,37 @@ function buildDirectAcpPrompt(userText, context = {}) {
   return [
     SYSTEM_PROMPT_TEMPLATE.replace('{{WORKSPACE_ROOT}}', `Workspace root: ${getWorkspacePath(app)}`),
     '',
-    workspaceBlock,
+    projectContextBlock,
+    memoryContextBlock,
     startupBootBlock,
     sessionContextBlock,
     nyxMemory.summary ? `MEMORY_SUMMARY:\n${nyxMemory.summary}` : '',
-    acpSession.id ? `ACP_SESSION:\n- id: ${acpSession.id}\n- turns: ${acpSession.turnCount || 0}` : '',
+    agentSession.id ? `AGENT_SESSION:\n- id: ${agentSession.id}\n- turns: ${agentSession.turnCount || 0}` : '',
     preferencesBlock ? `USER_PREFERENCES:\n${preferencesBlock}` : '',
     topicsBlock ? `RECENT_TOPICS:\n${topicsBlock}` : '',
     dailyMemoryBlock,
     browserBlock ? browserBlock : '',
     computerBlock,
     getPersonalityPrompt ? getPersonalityPrompt(personalityState) : '',
-    !acpSession.turnCount && historyBlock ? `RECENT_HISTORY:\n${historyBlock}` : '',
+    !agentSession.turnCount && historyBlock ? `RECENT_HISTORY:\n${historyBlock}` : '',
     `USER_INPUT: ${normalizedUserText}`,
   ].filter(Boolean).join('\n\n');
 }
 
-function buildBootstrapAcpPrompt(userText, options = {}, context = {}) {
+function buildBootstrapAgentPrompt(userText, options = {}, context = {}) {
   const { app = null, bootstrapState } = context;
   const normalizedUserText = String(userText || '').trim();
   const bootstrapAnswerBlock = buildBootstrapAnswersPrompt(bootstrapState);
-  
-  const workspaceBlock = wmBuildWorkspaceProjectContextPrompt(app, [
-    ...WORKSPACE_REQUIRED_FILES,
-    'BOOTSTRAP.md',
-  ].filter(Boolean), {
-    title: 'WORKSPACE_CONTEXT',
-    includeMissingMarkers: true,
-  });
+
+  const projectContextBlock = buildProjectContextPrompt(app, { privateSession: false });
+
+  const workspacePath = app ? getWorkspacePath(app) : 'workspace/';
 
   return [
     BOOTSTRAP_PROMPT_TEMPLATE,
     '',
-    workspaceBlock,
+    `WORKSPACE_PATH: ${workspacePath}`,
+    projectContextBlock,
     bootstrapAnswerBlock,
     options.mode === 'start' ? getBootstrapInitialPrompt() : '',
     `USER_INPUT: ${normalizedUserText}`,
@@ -114,13 +107,13 @@ function buildBootstrapAcpPrompt(userText, options = {}, context = {}) {
 }
 
 function buildCurrentSessionContextPrompt(context = {}) {
-  const { chatSession = {}, acpSession = {} } = context;
+  const { chatSession = {}, agentSession = {} } = context;
   const lines = [];
   if (chatSession.id) {
     lines.push(`SESSION_ID: ${chatSession.id}`);
     lines.push(`SESSION_CREATED: ${chatSession.createdAt || '-'}`);
     lines.push(`SESSION_LAST_USED: ${chatSession.lastUsedAt || '-'}`);
-    lines.push(`SESSION_TURNS: ${acpSession.turnCount || 0}`);
+    lines.push(`SESSION_TURNS: ${agentSession.turnCount || 0}`);
     lines.push(`SESSION_COMPACTIONS: ${Number(chatSession.compactionCount || 0)}`);
   }
   return lines.length ? `CURRENT_SESSION:\n${lines.join('\n')}` : '';
@@ -169,13 +162,13 @@ function buildComputerStatePrompt(context = {}) {
     .slice(0, 10)
     .map((item) => `- ${normalizeLine(item.title, 80)}${item.process ? ` | ${item.process}` : ''}`)
     .join('\n');
-    
+
   const foregroundBounds = computerState.foregroundBounds
     && Number.isFinite(Number(computerState.foregroundBounds.width))
     && Number.isFinite(Number(computerState.foregroundBounds.height))
     ? `${Math.round(Number(computerState.foregroundBounds.x || 0))},${Math.round(Number(computerState.foregroundBounds.y || 0))},${Math.round(Number(computerState.foregroundBounds.width || 0))},${Math.round(Number(computerState.foregroundBounds.height || 0))}`
     : '';
-    
+
   const interactiveElementLines = (computerState.interactiveElements || [])
     .slice(0, 12)
     .map((item) => {
@@ -226,7 +219,7 @@ function buildAutoToolBatchCompleteText(results = []) {
   if (!results.length) return '';
   const ok = results.filter(r => r.ok).map(r => r.type);
   const err = results.filter(r => !r.ok).map(r => r.type);
-  
+
   if (err.length) {
     return `Completato con errori in ${formatToolListForSpeech(err)}.`;
   }
@@ -235,17 +228,22 @@ function buildAutoToolBatchCompleteText(results = []) {
 
 function buildToolResultPrompt(results = [], userText = '') {
   if (!results.length) return '';
+  const okCount = results.filter((res) => res.ok).length;
+  const errorCount = results.length - okCount;
   const sections = results.map((res) => {
     const status = res.ok ? 'SUCCESS' : 'ERROR';
     const content = JSON.stringify(res, null, 2);
     return `[TOOL: ${res.type}] [STATUS: ${status}]\n${content}`;
   });
-  return sections.join('\n\n');
+  const guidance = okCount && errorCount
+    ? 'PARTIAL_SUCCESS: alcuni tool sono falliti, ma usa prima i risultati riusciti. Se bastano per rispondere, rispondi direttamente senza tentare altri fallback rumorosi.'
+    : '';
+  return [guidance, ...sections].filter(Boolean).join('\n\n');
 }
 
 module.exports = {
-  buildDirectAcpPrompt,
-  buildBootstrapAcpPrompt,
+  buildDirectAgentPrompt,
+  buildBootstrapAgentPrompt,
   buildCurrentSessionContextPrompt,
   buildStartupBootPrompt,
   buildBrowserStatePrompt,

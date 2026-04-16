@@ -1,4 +1,5 @@
 import React from 'react';
+import DebugPanel from './DebugPanel';
 
 function SettingsPanel({
   brain,
@@ -9,16 +10,36 @@ function SettingsPanel({
   testResult,
   testPending,
   isBusy,
+  userSettings,
+  onSaveUserSettings,
+  onSaveSoulSettings,
+  onSaveIdentitySettings,
+  debugLogs,
+  onRefreshDebugLogs,
+  onClearDebugLogs,
 }) {
   const options = Array.isArray(brain?.options) ? brain.options : [];
   const ollamaHostInputId = 'ollama-host-input';
   const ollamaModelInputId = 'ollama-model-input';
   const [ollamaHost, setOllamaHost] = React.useState(brain?.ollama?.host || 'http://127.0.0.1:11434');
-  const [ollamaModel, setOllamaModel] = React.useState(brain?.ollama?.model || 'qwen3.5:0.8b');
+  const [ollamaModel, setOllamaModel] = React.useState(brain?.ollama?.model || 'llama3.2:1b');
+
+  const [userName, setUserName] = React.useState(userSettings?.name || '');
+  const [preferredName, setPreferredName] = React.useState(userSettings?.preferredName || '');
+  const [timezone, setTimezone] = React.useState(userSettings?.timezone || 'Europe/Rome');
+  const [privacy, setPrivacy] = React.useState(userSettings?.privacy || '');
+
+  const [avatarName, setAvatarName] = React.useState(userSettings?.avatarName || 'Nyx');
+  const [toneStyle, setToneStyle] = React.useState(userSettings?.toneStyle || 'pragmatic');
+  const [voiceStyle, setVoiceStyle] = React.useState(userSettings?.voiceStyle || 'neutral');
+  const [boundaries, setBoundaries] = React.useState(userSettings?.boundaries || '');
+
+  const [role, setRole] = React.useState(userSettings?.role || '');
+  const [focusContext, setFocusContext] = React.useState(userSettings?.focusContext || '');
 
   React.useEffect(() => {
     setOllamaHost(brain?.ollama?.host || 'http://127.0.0.1:11434');
-    setOllamaModel(brain?.ollama?.model || 'qwen3.5:0.8b');
+    setOllamaModel(brain?.ollama?.model || 'llama3.2:1b');
   }, [brain?.ollama?.host, brain?.ollama?.model]);
 
   return (
@@ -26,7 +47,7 @@ function SettingsPanel({
       <div className="settings-header">
         <div>
           <div className="settings-eyebrow">Settings</div>
-          <div className="settings-title">Brain ACP</div>
+          <div className="settings-title">Brain API</div>
         </div>
         <div className="settings-actions settings-actions-header">
           <button
@@ -95,6 +116,140 @@ function SettingsPanel({
           );
         })}
 
+        <div className="settings-section">
+          <div className="settings-header">
+            <div className="settings-eyebrow">User Settings</div>
+            <div className="settings-title">Identity & Preferences</div>
+          </div>
+
+          <label className="settings-field">
+            <span className="settings-label">Your Name</span>
+            <input
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              placeholder="Enter your name"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">How to Call You</span>
+            <input
+              value={preferredName}
+              onChange={(e) => setPreferredName(e.target.value)}
+              placeholder="Preferred name or nickname"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">Timezone</span>
+            <input
+              value={timezone}
+              onChange={(e) => setTimezone(e.target.value)}
+              placeholder="Europe/Rome"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">Privacy Preferences</span>
+            <input
+              value={privacy}
+              onChange={(e) => setPrivacy(e.target.value)}
+              placeholder="Memory sharing preferences"
+            />
+          </label>
+
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="toolbar-pill"
+              onClick={() => onSaveUserSettings({ name: userName, preferredName, timezone, privacy })}
+              disabled={isBusy}
+            >
+              Save User Settings
+            </button>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-header">
+            <div className="settings-eyebrow">Avatar Settings</div>
+            <div className="settings-title">Soul & Identity</div>
+          </div>
+
+          <label className="settings-field">
+            <span className="settings-label">Avatar Name</span>
+            <input
+              value={avatarName}
+              onChange={(e) => setAvatarName(e.target.value)}
+              placeholder="Nyx"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">Tone Style</span>
+            <input
+              value={toneStyle}
+              onChange={(e) => setToneStyle(e.target.value)}
+              placeholder="pragmatic, clear-headed"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">Voice Style</span>
+            <input
+              value={voiceStyle}
+              onChange={(e) => setVoiceStyle(e.target.value)}
+              placeholder="neutral"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">Boundaries</span>
+            <input
+              value={boundaries}
+              onChange={(e) => setBoundaries(e.target.value)}
+              placeholder="Hard constraints"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">Role</span>
+            <input
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              placeholder="Operational role"
+            />
+          </label>
+
+          <label className="settings-field">
+            <span className="settings-label">Focus Context</span>
+            <input
+              value={focusContext}
+              onChange={(e) => setFocusContext(e.target.value)}
+              placeholder="Default context"
+            />
+          </label>
+
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="toolbar-pill"
+              onClick={() => onSaveSoulSettings({ avatarName, toneStyle, voiceStyle, boundaries })}
+              disabled={isBusy}
+            >
+              Save Soul Settings
+            </button>
+            <button
+              type="button"
+              className="toolbar-pill"
+              onClick={() => onSaveIdentitySettings({ role, focusContext })}
+              disabled={isBusy}
+            >
+              Save Identity Settings
+            </button>
+          </div>
+        </div>
+
         <div className="ollama-card">
           <div className="brain-option-header">
             <div>
@@ -119,7 +274,7 @@ function SettingsPanel({
               id={ollamaModelInputId}
               value={ollamaModel}
               onChange={(event) => setOllamaModel(event.target.value)}
-              placeholder="qwen3.5:0.8b"
+              placeholder="llama3.2:1b"
             />
           </label>
 
@@ -142,6 +297,12 @@ function SettingsPanel({
           </div>
         </div>
       </div>
+
+      <DebugPanel
+        debugLogs={debugLogs || []}
+        onRefreshLogs={onRefreshDebugLogs}
+        onClearLogs={onClearDebugLogs}
+      />
     </div>
   );
 }

@@ -98,10 +98,14 @@ function getWindowLayout(displayId) {
   const chatHeight = Math.min(Math.max(760, Math.floor(workArea.height * WINDOW_HEIGHT_RATIO_CHAT)), workArea.height - gap * 2);
   const avatarWidth = Math.min(Math.max(WINDOW_MIN_AVATAR_WIDTH, Math.floor(workArea.width * WINDOW_AVATAR_WIDTH_RATIO)), workArea.width - chatWidth - gap * 3);
   const avatarHeight = Math.min(Math.max(WINDOW_MIN_AVATAR_HEIGHT, Math.floor(workArea.height * WINDOW_HEIGHT_RATIO_AVATAR)), workArea.height - gap * 2);
+  const pairHeight = Math.min(Math.max(chatHeight, avatarHeight), workArea.height - gap * 2);
+  const pairY = workArea.y + Math.max(gap, Math.floor((workArea.height - pairHeight) / 2));
+  const pairWidth = Math.min(workArea.width - gap * 2, avatarWidth + gap + chatWidth);
+  const pairX = workArea.x + Math.max(gap, Math.floor((workArea.width - pairWidth) / 2));
 
   return {
-    avatar: { x: workArea.x + Math.max(gap, Math.floor((workArea.width - avatarWidth) / 2)), y: workArea.y + Math.max(gap, Math.floor((workArea.height - avatarHeight) / 2)), width: avatarWidth, height: avatarHeight },
-    chat: { x: workArea.x + workArea.width - chatWidth - gap, y: workArea.y + Math.max(gap, Math.floor((workArea.height - chatHeight) / 2)), width: chatWidth, height: chatHeight },
+    avatar: { x: pairX, y: pairY, width: avatarWidth, height: pairHeight },
+    chat: { x: pairX + avatarWidth + gap, y: pairY, width: chatWidth, height: pairHeight },
     canvas: { x: workArea.x + workArea.width - canvasWidth - gap, y: workArea.y + gap, width: canvasWidth, height: workArea.height - gap * 2 },
   };
 }
@@ -120,7 +124,10 @@ function getStoredWindowConfig(app, key, defaultAlwaysOnTop) {
   const saved = state?.[key];
   const displayId = saved?.displayId || screen.getPrimaryDisplay().id;
   const fallbackBounds = getWindowLayout(displayId)[key];
-  const bounds = saved?.bounds && isBoundsVisible(saved.bounds) ? saved.bounds : fallbackBounds;
+  const shouldUseStartupPairLayout = key === 'avatar' || key === 'chat';
+  const bounds = shouldUseStartupPairLayout
+    ? fallbackBounds
+    : (saved?.bounds && isBoundsVisible(saved.bounds) ? saved.bounds : fallbackBounds);
   return { bounds, displayId, alwaysOnTop: saved?.alwaysOnTop ?? defaultAlwaysOnTop };
 }
 
@@ -360,7 +367,7 @@ function createAvatarWindow(app, options = {}) {
   const avatarWindow = new BrowserWindow({
     x: config.bounds.x, y: config.bounds.y, width: config.bounds.width, height: config.bounds.height,
     minWidth: WINDOW_MIN_AVATAR_WIDTH, minHeight: WINDOW_MIN_AVATAR_HEIGHT,
-    show: false, frame: false, transparent: true, hasShadow: false, title: 'Avatar ACP',
+    show: false, frame: false, transparent: true, hasShadow: false, title: 'Nyx Avatar',
     backgroundColor: '#00000000',
     webPreferences: { preload: path.join(__dirname, 'avatar-window-bridge.js'), contextIsolation: true, sandbox: false, nodeIntegration: false, webviewTag: false },
   });
@@ -478,7 +485,7 @@ function createChatWindow(app, options = {}) {
   const chatWindow = new BrowserWindow({
     x: config.bounds.x, y: config.bounds.y, width: config.bounds.width, height: config.bounds.height,
     minWidth: WINDOW_MIN_CHAT_WIDTH, minHeight: WINDOW_MIN_CHAT_HEIGHT, show: false, frame: true, transparent: false, hasShadow: true,
-    title: 'Avatar ACP Chat', backgroundColor: '#0c111c',
+    title: 'Nyx Chat', backgroundColor: '#0c111c',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false },
   });
 

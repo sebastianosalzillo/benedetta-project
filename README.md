@@ -1,179 +1,152 @@
 # Benedetta Project
 
-> A local-first AI desktop companion with a 3D avatar, conversational intelligence, and desktop automation — all running privately on your machine.
+Local-first Electron desktop companion with a 3D avatar, chat, workspace memory, browser automation, optional desktop control, and local/HTTP AI brain providers.
 
-![Electron](https://img.shields.io/badge/Electron-40-blue?logo=electron)
-![React](https://img.shields.io/badge/React-18-61DAFB?logo=react)
-![Three.js](https://img.shields.io/badge/Three.js-r180-black?logo=three.js)
-![License](https://img.shields.io/badge/license-MIT-green)
+## Current Version
 
----
+Version `1.1.0` removes the old subprocess brain integration. The app now uses the direct agent runtime with:
 
-## What is Benedetta?
+- OpenCode Zen HTTP API
+- Ollama HTTP API
 
-**Benedetta Project** is an Electron + React desktop application that combines a **real-time 3D avatar** with a **local AI agent**. It runs entirely on your machine — no cloud API keys required for core functionality.
+On the first launch after upgrading to `1.1.0`, Benedetta resets generated local state under Electron `userData` so the app starts clean. This clears generated chat/session/workspace state and then records the current app version so later launches do not keep resetting.
 
-### Features
+## Features
 
 | Feature | Description |
-|---|---|
-| 🧠 **Local AI brain** | Powered by [Qwen Code CLI](https://github.com/QwenLM/qwen-code) or any [Ollama](https://ollama.ai) model |
-| 💬 **Chat interface** | Streaming chat with reasoning tag support and session memory |
-| 🎭 **3D Avatar** | Real-time 3D character with emotions, gestures, poses, and lip-sync |
-| 🖼️ **Canvas workspace** | Rich content panel for markdown, images, video, and structured output |
-| 🌐 **Browser automation** | Web browsing and task execution via PinchTab |
-| 🖥️ **Desktop control** | Windows GUI automation via pywinauto-MCP |
-| 🔊 **Local TTS** | Speech synthesis via Kokoro (local Python server, optional) |
-
----
+| --- | --- |
+| AI brain | OpenCode Zen or Ollama-backed agent responses |
+| Chat | Streaming-style chat UI with JSON action parsing |
+| 3D avatar | Emotions, gestures, poses, animation, and lip sync |
+| Workspace | Markdown workspace files, bootstrap flow, memory notes, sessions |
+| Canvas | Side panel for text, files, images, video, audio, and browser content |
+| Browser automation | PinchTab-backed browser actions |
+| Desktop control | Optional pywinauto-MCP integration on Windows |
+| TTS | Optional Kokoro local Python TTS service |
 
 ## Architecture
 
-The app uses **three Electron windows** communicating over a typed IPC bridge:
-
-```
-┌─────────────────┐   ┌──────────────────┐   ┌──────────────────┐
-│   Chat Window   │   │  Avatar Window   │   │  Canvas Window   │
-│ AvatarChat.jsx  │   │  NyxAvatar.jsx   │   │CanvasWorkspace   │
-└────────┬────────┘   └────────┬─────────┘   └────────┬─────────┘
-         │                    │                       │
-         └──────────┬─────────┘                       │
-                    │           IPC (preload.js)       │
-         ┌──────────▼──────────────────────────────────▼──────┐
-         │              Electron Main Process (main.js)       │
-         │  ┌──────────┐  ┌───────────┐  ┌────────────────┐  │
-         │  │ ACP/Brain│  │ TTS Kokoro│  │ Browser Agent  │  │
-         │  │ (Qwen/   │  │ Python srv│  │ (PinchTab)     │  │
-         │  │  Ollama) │  └───────────┘  └────────────────┘  │
-         │  └──────────┘                                      │
-         └────────────────────────────────────────────────────┘
+```text
+React chat UI
+  -> Electron preload IPC
+  -> Electron main process
+  -> direct agent runtime
+       -> OpenCode Zen HTTP API
+       -> Ollama HTTP API
+  -> action tools
+       -> avatar
+       -> workspace
+       -> canvas
+       -> browser
+       -> computer
+       -> memory
+       -> shell/file/search tools
 ```
 
----
+The legacy subprocess brain runtime and smoke test have been removed.
 
-## Prerequisites
+## Requirements
 
-- **Node.js** 20+ and **npm** 10+
-- One of:
-  - [Qwen Code CLI](https://github.com/QwenLM/qwen-code) installed globally: `npm install -g @qwen-code/qwen-code`
-  - [Ollama](https://ollama.ai) running locally with a model pulled (e.g. `ollama pull qwen3.5:0.8b`)
+- Node.js 20+
+- npm 10+
+- One brain provider:
+  - OpenCode Zen credentials in `.env.local` or environment variables
+  - Ollama running locally with a model such as `llama3.2:1b`
 
-### Optional services
+Optional:
 
-| Service | Purpose | Default port |
-|---|---|---|
-| [Kokoro TTS](https://github.com/remsky/Kokoro-FastAPI) | Local text-to-speech | `5037` |
-| [PinchTab](https://github.com/pinchtab/pinchtab) | Browser automation | `9867` |
-| [pywinauto-MCP](https://github.com/sandraschi/pywinauto-mcp) | Desktop GUI control | `10789` |
+- Kokoro TTS server for speech output
+- PinchTab for browser automation
+- pywinauto-MCP for Windows desktop automation
 
-All external services are **optional** — the core chat + avatar experience works without them.
-
----
-
-## Installation
+## Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/benedetta-project.git
-cd benedetta-project
 npm install
 ```
 
----
-
-## Running
+## Run
 
 ```bash
-# Development mode (Vite dev server + Electron)
 npm run dev
+```
 
-# Production mode (requires npm run build first)
+This starts:
+
+- Vite on `http://localhost:5174`
+- Electron pointing at the Vite dev server
+
+Production-style local run:
+
+```bash
 npm run build
 npm start
 ```
 
-Vite dev server runs on port **5174**.
-
----
-
 ## Configuration
 
-Copy `.env.example` to `.env` and edit as needed. No values are required to get started with Ollama.
+Useful environment variables:
 
-```bash
-cp .env.example .env
-```
-
-Key environment variables:
-
-| Variable | Default | Description |
-|---|---|---|
-| `NYX_OLLAMA_MODEL` | `qwen3.5:0.8b` | Default Ollama model |
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OPENCODE_API_KEY` | empty | OpenCode Zen API key |
+| `OPENCODE_BASE_URL` | `https://opencode.ai/zen/v1` | OpenCode-compatible API base URL |
+| `OPENCODE_MODEL` | `minimax-m2.5-free` | OpenCode model |
+| `NYX_OLLAMA_MODEL` | `llama3.2:1b` | Default Ollama model |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama API URL |
+| `AVATAR_AGENT_TIMEOUT_MS` | `120000` | Agent response timeout |
 | `KOKORO_PORT` | `5037` | Kokoro TTS port |
-| `PINCHTAB_PORT` | `9867` | PinchTab browser agent port |
-| `PINCHTAB_TOKEN` | *(empty)* | PinchTab auth token |
-| `AVATAR_ACP_TIMEOUT_MS` | `120000` | Agent response timeout |
+| `PINCHTAB_PORT` | `9867` | PinchTab port |
+| `PINCHTAB_TOKEN` | empty | PinchTab auth token |
 
-See `.env.example` for the full list.
+The app also reads `.env.local` at startup when present.
 
----
+## Workspace
 
-## Avatar System
+The generated workspace lives under Electron `userData`:
 
-The 3D avatar supports:
-
-**Emotions:** `happy`, `sad`, `angry`, `think`, `surprised`, `curious`, `neutral`, `fear`, `love`, `sleep`, `disgust`
-
-**Gestures:** `handup`, `ok`, `index`, `thumbup`, `thumbdown`, `side`, `shrug`, `namaste`
-
-**Poses:** `straight`, `side`, `hip`, `turn`, `back`, `wide`, `oneknee`, `kneel`, `bend`, `sitting`, `dance`
-
-**Animations:** `walking`
-
-The avatar state is controlled through the AI agent's JSON action segments — no direct API calls needed.
-
----
-
-## Skills System
-
-Drop a `.js` file into the `skills/` directory to extend the agent with custom behaviors:
-
-```js
-// skills/my-skill.js
-module.exports = {
-  id: 'my-skill',
-  name: 'My Custom Skill',
-  description: 'Does something cool',
-  trigger: /my trigger phrase/i,
-  handler: async ({ message, send }) => {
-    await send({ speech: 'Skill activated!' });
-  },
-};
+```text
+workspace/
+  IDENTITY.md
+  SOUL.md
+  AGENTS.md
+  TOOLS.md
+  USER.md
+  MEMORY.md
+  PERSONALITY.md
+  memory/
+  sessions/
 ```
 
----
+Bootstrap rules:
 
-## Testing
+- `/bootstrap` resets Markdown files in the workspace root and starts a clean bootstrap.
+- Bootstrap tool use is restricted to the `workspace` tool at runtime.
+- On version upgrade to `1.1.0`, generated local state is reset once automatically.
+
+## Scripts
 
 ```bash
-# Unit tests (Jest)
+npm run dev
+npm run build
+npm test
 npm run test:unit
-
-# Smoke test
-npm run test:smoke
-
-# E2E tests
 npm run test:e2e
+npm run dist
 ```
 
----
+`npm test` runs the Jest unit suite. It no longer invokes the removed subprocess brain smoke test.
 
-## Contributing
+## Verification Status
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Current checked baseline:
 
----
+- `npm run build`
+- `npm test -- --runInBand`
 
-## License
+## Notes For Maintainers
 
-MIT — see [LICENSE](LICENSE) for details.
+- Keep generated local runtime files out of git.
+- Do not reintroduce the removed subprocess brain protocol code.
+- Prefer OpenCode/Ollama direct runtime paths for new brain providers.
+- If a future release must force a clean local start, bump `package.json` version and the version-reset gate will run once on first launch.

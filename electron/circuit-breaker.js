@@ -21,7 +21,7 @@ function recordSuccess(state) {
   if (state.isTripped) {
     state.isTripped = false;
     state.trippedAt = null;
-    return { ok: true, message: 'Circuit breaker resettato. ACP operativo.' };
+    return { ok: true, message: 'Circuit breaker resettato. Agent operativo.' };
   }
 
   return { ok: true, message: null };
@@ -39,15 +39,15 @@ function recordFailure(state, reason = '') {
     return {
       ok: false,
       tripped: true,
-      message: `ACP non risponde dopo ${state.consecutiveFailures} tentativi consecutivi. Circuit breaker attivato.`,
-      suggestion: 'Prova a resettare la sessione con /reset o verifica che Qwen Code CLI sia installato.',
+      message: `Agent non risponde dopo ${state.consecutiveFailures} tentativi consecutivi. Circuit breaker attivato.`,
+      suggestion: 'Prova a resettare la sessione con /reset o verifica la configurazione del brain selezionato.',
     };
   }
 
   return {
     ok: false,
     tripped: false,
-    message: `Fallimento ACP ${state.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}.`,
+    message: `Fallimento Agent ${state.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}.`,
   };
 }
 

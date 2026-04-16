@@ -2,7 +2,7 @@ const { randomUUID } = require('crypto');
 const { STREAM_STATUS, MAX_CHAT_HISTORY } = require('./constants');
 
 /**
- * Thread-safe state manager for ACP chat requests.
+ * Thread-safe state manager for agent chat requests.
  * Replaces global mutable variables with a locked state machine
  * to prevent race conditions between concurrent async operations.
  */
@@ -68,8 +68,8 @@ class ChatRequestManager {
         stopReason: null,
         buffer: '',
         preview: '',
-        acpSessionId: null,
-        acpSessionNew: false,
+        agentSessionId: null,
+        agentSessionNew: false,
         streamEmitter: null,
         ...options,
       };
@@ -191,14 +191,14 @@ class ChatRequestManager {
   }
 
   /**
-   * Update ACP session info on the active request.
+   * Update Agent session info on the active request.
    */
-  async setAcpSession(requestId, sessionId, isNew) {
+  async setagentSession(requestId, sessionId, isNew) {
     await this._acquireLock();
     try {
       if (this._activeRequest?.id === requestId) {
-        this._activeRequest.acpSessionId = sessionId;
-        this._activeRequest.acpSessionNew = isNew;
+        this._activeRequest.agentSessionId = sessionId;
+        this._activeRequest.agentSessionNew = isNew;
       }
     } finally {
       this._releaseLock();

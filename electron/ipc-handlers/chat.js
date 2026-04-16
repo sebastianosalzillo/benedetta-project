@@ -41,8 +41,8 @@
  * @property {function(): boolean} isBootstrapPending - Check if workspace bootstrap is pending
  * @property {function(): boolean} isBootstrapActive - Check if bootstrap wizard is active
  * @property {function(): void} startBootstrapWizard - Start bootstrap wizard
- * @property {function(string, string, Object): Promise<void>} startBootstrapAcpRequest - Start bootstrap ACP request
- * @property {function(string, string): Promise<void>} startDirectAcpRequest - Start direct ACP request
+ * @property {function(string, string, Object): Promise<void>} startBootstrapAgentRequest - Start bootstrap Agent request
+ * @property {function(string, string): Promise<void>} startDirectAgentRequest - Start Direct agent request
  * @property {function(string, Object): void} reportDetachedAsyncError - Report async error
  * @property {function(string): void} emitHook - Emit event hook
  * @property {Object} personalityState - Personality state reference
@@ -154,14 +154,14 @@ function createChatHandlers(deps) {
       if (isBootstrapTurn) {
         if (!deps.bootstrapState.active) {
           deps.startBootstrapWizard();
-          deps.startBootstrapAcpRequest(requestId, trimmed, { mode: 'start' })
+          deps.startBootstrapAgentRequest(requestId, trimmed, { mode: 'start' })
             .catch((error) => {
-              deps.reportDetachedAsyncError('startBootstrapAcpRequest:start', error, requestId);
+              deps.reportDetachedAsyncError('startBootstrapAgentRequest:start', error, requestId);
             });
         } else {
-          deps.startBootstrapAcpRequest(requestId, trimmed, { mode: 'answer' })
+          deps.startBootstrapAgentRequest(requestId, trimmed, { mode: 'answer' })
             .catch((error) => {
-              deps.reportDetachedAsyncError('startBootstrapAcpRequest:answer', error, requestId);
+              deps.reportDetachedAsyncError('startBootstrapAgentRequest:answer', error, requestId);
             });
         }
 
@@ -173,10 +173,10 @@ function createChatHandlers(deps) {
         };
       }
 
-      // Normal ACP flow
-      deps.startDirectAcpRequest(requestId, trimmed)
+      // Normal Agent flow
+      deps.startDirectAgentRequest(requestId, trimmed)
         .catch((error) => {
-          deps.reportDetachedAsyncError('startDirectAcpRequest', error, requestId);
+          deps.reportDetachedAsyncError('startDirectAgentRequest', error, requestId);
         });
 
       return {

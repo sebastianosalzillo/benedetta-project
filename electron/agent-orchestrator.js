@@ -4,15 +4,17 @@ const { spawn } = require('child_process');
 
 /**
  * Configure dependencies for the orchestrator.
+ * Safe: setupOrchestrator is called once at startup, not during requests.
  */
 let deps = {};
 function setupOrchestrator(context) {
   deps = context;
 }
 
-const READ_ONLY_TOOL_TYPES = new Set(['read_file', 'glob', 'grep', 'web_fetch', 'web_search', 'memory_search']);
-const DATA_TOOL_TYPES = new Set(['read_file', 'write_file', 'edit_file', 'apply_patch', 'shell', 'glob', 'grep', 'multi_file_read', 'git', 'web_fetch', 'web_search', 'task', 'memory_search']);
+const READ_ONLY_TOOL_TYPES = new Set(['read_file', 'glob', 'grep', 'web_fetch', 'web_search', 'memory_search', 'memory_get']);
+const DATA_TOOL_TYPES = new Set(['read_file', 'write_file', 'edit_file', 'apply_patch', 'shell', 'glob', 'grep', 'multi_file_read', 'git', 'web_fetch', 'web_search', 'task', 'memory_search', 'memory_get', 'memory_write']);
 const ACTION_TOOL_TYPES = new Set(['avatar', 'delay', 'browser', 'computer', 'canvas', 'workspace']);
+const BOOTSTRAP_ALLOWED_TOOL_TYPES = new Set(['workspace']);
 
 /**
  * Core agent loop that handles multi-turn interactions.
@@ -21,7 +23,7 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
   const {
     MAX_AGENT_TURNS,
     getActiveResponseId,
-    runAcpTurn,
+    runAgentTurn,
     normalizeLegacyResponseToPhasePlan,
     emitPhaseStreamEvent,
     createMessageId,
@@ -59,7 +61,7 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
       return { cancelled: true, lastResponse, turns: turnCount, toolResults: allToolResults };
     }
 
-    const turn = await runAcpTurn(requestId, currentPrompt, userText, sessionInfo, {
+    const turn = await runAgentTurn(requestId, currentPrompt, userText, sessionInfo, {
       ...options,
       streamPreview: turnCount === 1,
     });
@@ -130,10 +132,27 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
       const phaseSequence = Array.isArray(phase.sequence) ? phase.sequence : [];
       const dataToolCalls = extractToolCalls(phaseSequence);
       const actionCalls = extractActionCalls(phaseSequence);
-      const { available: executableActionCalls, blocked: blockedActionCalls } = partitionAvailableToolCalls(actionCalls);
-      const { available: executableDataToolCalls, blocked: blockedDataToolCalls } = partitionAvailableToolCalls(dataToolCalls);
-      
-      const blockedResults = [...blockedActionCalls, ...blockedDataToolCalls];
+      const allRequestedToolCalls = [...actionCalls, ...dataToolCalls];
+      const bootstrapBlockedToolCalls = options.bootstrap === true
+        ? allRequestedToolCalls
+          .filter((call) => !BOOTSTRAP_ALLOWED_TOOL_TYPES.has(call.type))
+          .map((call) => ({
+            type: call.type,
+            ok: false,
+            error: 'Tool blocked during bootstrap. Use only the workspace tool with mode "read" or "replace".',
+            directive: call.directive || null,
+          }))
+        : [];
+      const bootstrapAllowedActionCalls = options.bootstrap === true
+        ? actionCalls.filter((call) => BOOTSTRAP_ALLOWED_TOOL_TYPES.has(call.type))
+        : actionCalls;
+      const bootstrapAllowedDataToolCalls = options.bootstrap === true
+        ? dataToolCalls.filter((call) => BOOTSTRAP_ALLOWED_TOOL_TYPES.has(call.type))
+        : dataToolCalls;
+      const { available: executableActionCalls, blocked: blockedActionCalls } = partitionAvailableToolCalls(bootstrapAllowedActionCalls);
+      const { available: executableDataToolCalls, blocked: blockedDataToolCalls } = partitionAvailableToolCalls(bootstrapAllowedDataToolCalls);
+
+      const blockedResults = [...bootstrapBlockedToolCalls, ...blockedActionCalls, ...blockedDataToolCalls];
       if (blockedResults.length) allToolResults.push(...blockedResults);
 
       const actionExecutionResults = [];
@@ -199,9 +218,13 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
               ok: true,
               file: workspaceResult.file,
               path: workspaceResult.path,
+              exists: workspaceResult.exists,
+              content: workspaceResult.content,
               skipped: Boolean(workspaceResult.skipped),
               mode: String(actionCall.directive?.mode || 'append').trim(),
-              summary: workspaceResult.skipped ? 'content already present' : 'workspace updated',
+              summary: workspaceResult.mode === 'read'
+                ? (workspaceResult.exists ? 'workspace file read' : 'workspace file missing or empty')
+                : (workspaceResult.skipped ? 'content already present' : 'workspace updated'),
               warnings: [],
             });
           }
@@ -226,11 +249,12 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
       if (!executableDataToolCalls.length) {
         if (nonSpeechToolResults.length) {
           const nsHasErrors = nonSpeechToolResults.some(r => !r.ok);
-          emitPhaseStreamEvent(requestId, phaseId, phaseKind, nsHasErrors
+          const nsHasSuccess = nonSpeechToolResults.some(r => r.ok);
+          emitPhaseStreamEvent(requestId, phaseId, phaseKind, nsHasErrors && !nsHasSuccess
             ? { type: 'phase_tool_error', errors: nonSpeechToolResults.filter(r => !r.ok).map(r => `${r.type}: ${r.error}`).join('; '), turn: turnCount }
-            : { type: 'phase_tool_complete', tools: nonSpeechToolResults.map(r => r.type), turn: turnCount });
+            : { type: 'phase_tool_complete', tools: nonSpeechToolResults.map(r => r.type), warnings: nsHasErrors ? nonSpeechToolResults.filter(r => !r.ok).map(r => `${r.type}: ${r.error}`).join('; ') : '', turn: turnCount });
           const autoCompleteText = buildAutoToolBatchCompleteText(nonSpeechToolResults);
-          if (autoCompleteText) await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, { emotion: nonSpeechToolResults.some(r => !r.ok) ? 'fear' : 'happy', gesture: nonSpeechToolResults.some(r => !r.ok) ? 'shrug' : 'thumbup' });
+          if (autoCompleteText && (!nsHasErrors || !nsHasSuccess)) await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, { emotion: nsHasErrors ? 'fear' : 'happy', gesture: nsHasErrors ? 'shrug' : 'thumbup' });
           nextPromptAfterTools = [rebuildPrompt(userText), '', `--- TURN ${turnCount} PHASE ${phaseId} TOOL RESULTS ---`, buildToolResultPrompt(nonSpeechToolResults, userText)].join('\n\n');
           shouldContinueLoop = true;
         }
@@ -241,12 +265,13 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
       const combinedResults = [...nonSpeechToolResults, ...results];
       allToolResults.push(...results);
       const hasErrors = combinedResults.some(r => !r.ok);
+      const hasSuccess = combinedResults.some(r => r.ok);
 
-      emitPhaseStreamEvent(requestId, phaseId, phaseKind, hasErrors
+      emitPhaseStreamEvent(requestId, phaseId, phaseKind, hasErrors && !hasSuccess
         ? { type: 'phase_tool_error', errors: combinedResults.filter(r => !r.ok).map(r => `${r.type}: ${r.error}`).join('; '), turn: turnCount }
-        : { type: 'phase_tool_complete', tools: combinedResults.map(r => r.type), turn: turnCount });
+        : { type: 'phase_tool_complete', tools: combinedResults.map(r => r.type), warnings: hasErrors ? combinedResults.filter(r => !r.ok).map(r => `${r.type}: ${r.error}`).join('; ') : '', turn: turnCount });
       const autoCompleteText = buildAutoToolBatchCompleteText(combinedResults);
-      if (autoCompleteText) await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, { emotion: hasErrors ? 'fear' : 'happy', gesture: hasErrors ? 'shrug' : 'thumbup' });
+      if (autoCompleteText && (!hasErrors || !hasSuccess)) await emitSpokenStatusUpdate(requestId, phaseId, autoCompleteText, { emotion: hasErrors ? 'fear' : 'happy', gesture: hasErrors ? 'shrug' : 'thumbup' });
       nextPromptAfterTools = [rebuildPrompt(userText), '', `--- TURN ${turnCount} PHASE ${phaseId} TOOL RESULTS ---`, buildToolResultPrompt(combinedResults, userText)].join('\n\n');
       shouldContinueLoop = true;
       break;
@@ -268,7 +293,7 @@ async function agentLoop(requestId, userText, prompt, sessionInfo, options = {})
   return { cancelled: false, completed: false, lastResponse, turns: turnCount, toolResults: allToolResults };
 }
 
-async function startDirectAcpRequest(requestId, userText) {
+async function startDirectAgentRequest(requestId, userText) {
   const {
     resetBrowserAgentState,
     getSelectedBrainOption,
@@ -282,17 +307,17 @@ async function startDirectAcpRequest(requestId, userText) {
     setTtsState,
     STREAM_STATUS,
     refreshComputerState,
-    buildDirectAcpPrompt,
-    prepareAcpSessionTurn,
+    buildDirectAgentPrompt,
+    prepareAgentSessionTurn,
     getBrainSpawnConfig,
     setActiveResponseId,
     sendAvatarCommand,
     agentLoop,
     activeChatRequest,
     setActiveChatRequest,
-    markAcpSessionTurnCompleted,
+    markAgentSessionTurnCompleted,
     consumeStartupBootPrompt,
-    resetAcpSession,
+    resetAgentSession,
     stopActiveChatRequest,
   } = deps;
 
@@ -300,24 +325,24 @@ async function startDirectAcpRequest(requestId, userText) {
   const selectedBrain = getSelectedBrainOption();
 
   if (!hasSelectedBrainLauncher()) {
-    const errorMessage = { id: createMessageId('system'), role: 'system', text: `ACP unavailable: launcher ${selectedBrain.label} not found.`, ts: new Date().toISOString() };
+    const errorMessage = { id: createMessageId('system'), role: 'system', text: `Brain unavailable: ${selectedBrain.label} is not configured.`, ts: new Date().toISOString() };
     appendHistoryMessage(errorMessage);
     emitChatStream({ type: 'error', requestId, error: errorMessage.text, message: errorMessage });
     setStatus('error');
-    setBrainMode('direct-acp-missing');
+    setBrainMode('direct-agent-missing');
     setStreamStatus(STREAM_STATUS.DISCONNECTED);
     setTtsState('error', { error: errorMessage.text });
     return;
   }
 
   await refreshComputerState().catch(() => null);
-  const prompt = buildDirectAcpPrompt(userText);
-  const sessionInfo = prepareAcpSessionTurn();
+  const prompt = buildDirectAgentPrompt(userText);
+  const sessionInfo = prepareAgentSessionTurn();
   const launch = await getBrainSpawnConfig(prompt, sessionInfo);
-  
+
   setActiveResponseId(requestId);
   setStatus('thinking');
-  setBrainMode('direct-acp-streaming');
+  setBrainMode('direct-agent-streaming');
   setStreamStatus(STREAM_STATUS.WAIT);
   sendAvatarCommand({ cmd: 'expression', expression: 'think' });
   sendAvatarCommand({ cmd: 'gesture', gesture: 'index', duration: 6 });
@@ -325,8 +350,8 @@ async function startDirectAcpRequest(requestId, userText) {
 
   try {
     const result = await agentLoop(requestId, userText, prompt, sessionInfo, {
-      rebuildPrompt: buildDirectAcpPrompt,
-      streamPreview: launch.kind !== 'ollama-http',
+      rebuildPrompt: buildDirectAgentPrompt,
+      streamPreview: !['ollama-http', 'opencode-http'].includes(launch.kind),
       strictJson: true,
     });
 
@@ -338,28 +363,28 @@ async function startDirectAcpRequest(requestId, userText) {
       }
       setActiveResponseId(null);
       setStatus('idle');
-      setBrainMode('direct-acp-ready');
+      setBrainMode('direct-agent-ready');
       setStreamStatus(STREAM_STATUS.CONNECTED);
       return;
     }
 
     const active = activeChatRequest();
-    const finalSessionId = active?.acpSessionId || sessionInfo.id;
+    const finalSessionId = active?.agentSessionId || sessionInfo.id;
     if (active?.id === requestId) {
       active.streamEmitter?.stop();
       setActiveChatRequest(null);
     }
-    markAcpSessionTurnCompleted(finalSessionId);
+    markAgentSessionTurnCompleted(finalSessionId);
     consumeStartupBootPrompt();
     setStatus('idle');
-    setBrainMode('direct-acp-ready');
+    setBrainMode('direct-agent-ready');
     setStreamStatus(STREAM_STATUS.CONNECTED);
   } catch (error) {
     const active = activeChatRequest();
     const cancelled = Boolean(active?.cancelled);
     const stopReason = active?.stopReason;
-    const acpSessionId = active?.acpSessionId || sessionInfo.id;
-    const acpSessionNew = Boolean(active?.acpSessionNew ?? sessionInfo.isNew);
+    const agentSessionId = active?.agentSessionId || sessionInfo.id;
+    const agentSessionNew = Boolean(active?.agentSessionNew ?? sessionInfo.isNew);
 
     if (active?.id === requestId) {
       active.streamEmitter?.stop();
@@ -367,30 +392,30 @@ async function startDirectAcpRequest(requestId, userText) {
     }
 
     if (cancelled) {
-      if (acpSessionNew) resetAcpSession(acpSessionId);
+      if (agentSessionNew) resetAgentSession(agentSessionId);
       setActiveResponseId(null);
       const systemMessage = { id: createMessageId('system'), role: 'system', text: stopReason === 'timeout' ? 'Response interrupted: timeout.' : 'Response interrupted.', ts: new Date().toISOString() };
       appendHistoryMessage(systemMessage);
       emitChatStream({ type: 'stopped', requestId, message: systemMessage });
       setStatus('idle');
-      setBrainMode('direct-acp-ready');
+      setBrainMode('direct-agent-ready');
       setStreamStatus(stopReason === 'timeout' ? STREAM_STATUS.TIMEOUT : STREAM_STATUS.CONNECTED);
       setTtsState('idle', { error: null });
       return;
     }
 
     setActiveResponseId(null);
-    const systemMessage = { id: createMessageId('system'), role: 'system', text: error.message || 'Direct ACP error', ts: new Date().toISOString() };
+    const systemMessage = { id: createMessageId('system'), role: 'system', text: error.message || 'Direct agent error', ts: new Date().toISOString() };
     appendHistoryMessage(systemMessage);
     emitChatStream({ type: 'error', requestId, error: systemMessage.text, message: systemMessage });
     setStatus('error');
-    setBrainMode('direct-acp-error');
+    setBrainMode('direct-agent-error');
     setStreamStatus(STREAM_STATUS.ERROR);
     setTtsState('error', { error: systemMessage.text });
   }
 }
 
-async function startBootstrapAcpRequest(requestId, userText, options = {}) {
+async function startBootstrapAgentRequest(requestId, userText, options = {}) {
   const {
     resetBrowserAgentState,
     getSelectedBrainOption,
@@ -403,9 +428,9 @@ async function startBootstrapAcpRequest(requestId, userText, options = {}) {
     setStreamStatus,
     setTtsState,
     STREAM_STATUS,
-    prepareAcpSessionTurn,
+    prepareAgentSessionTurn,
     setActiveChatRequest,
-    buildBootstrapAcpPrompt,
+    buildBootstrapAgentPrompt,
     agentLoop,
     setActiveResponseId,
     consumeStartupBootPrompt,
@@ -416,41 +441,42 @@ async function startBootstrapAcpRequest(requestId, userText, options = {}) {
   const selectedBrain = getSelectedBrainOption();
 
   if (!hasSelectedBrainLauncher()) {
-    const errorMessage = { id: createMessageId('system'), role: 'system', text: `ACP unavailable: launcher ${selectedBrain.label} not found.`, ts: new Date().toISOString() };
+    const errorMessage = { id: createMessageId('system'), role: 'system', text: `Brain unavailable: ${selectedBrain.label} is not configured.`, ts: new Date().toISOString() };
     appendHistoryMessage(errorMessage);
     emitChatStream({ type: 'error', requestId, error: errorMessage.text, message: errorMessage });
     setStatus('error');
-    setBrainMode('direct-acp-missing');
+    setBrainMode('direct-agent-missing');
     setStreamStatus(STREAM_STATUS.DISCONNECTED);
     setTtsState('error', { error: errorMessage.text });
     return;
   }
 
-  const sessionInfo = prepareAcpSessionTurn();
+  const sessionInfo = prepareAgentSessionTurn();
   const activeChatRequest = {
     id: requestId,
     proc: null,
     cancelled: false,
     buffer: '',
     preview: '',
-    acpSessionId: sessionInfo.id,
-    acpSessionNew: sessionInfo.isNew,
+    agentSessionId: sessionInfo.id,
+    agentSessionNew: sessionInfo.isNew,
     streamEmitter: deps.createStreamEmitter(requestId),
   };
   setActiveChatRequest(activeChatRequest);
 
-  const prompt = buildBootstrapAcpPrompt(userText, options);
+  const prompt = buildBootstrapAgentPrompt(userText, options);
   setActiveResponseId(requestId);
   setStatus('thinking');
-  setBrainMode('direct-acp-streaming');
+  setBrainMode('direct-agent-streaming');
   setStreamStatus(STREAM_STATUS.WAIT);
   emitChatStream({ type: 'started', requestId });
 
   try {
     const result = await agentLoop(requestId, userText, prompt, sessionInfo, {
-      rebuildPrompt: buildBootstrapAcpPrompt,
-      streamPreview: true,
+      rebuildPrompt: buildBootstrapAgentPrompt,
+      streamPreview: false,
       strictJson: true,
+      bootstrap: true,
     });
 
     if (result.cancelled) {
@@ -471,7 +497,7 @@ async function startBootstrapAcpRequest(requestId, userText, options = {}) {
     }
     consumeStartupBootPrompt();
     setStatus('idle');
-    setBrainMode('direct-acp-ready');
+    setBrainMode('direct-agent-ready');
     setStreamStatus(STREAM_STATUS.CONNECTED);
   } catch (error) {
     setActiveResponseId(null);
@@ -490,6 +516,6 @@ async function startBootstrapAcpRequest(requestId, userText, options = {}) {
 module.exports = {
   setupOrchestrator,
   agentLoop,
-  startDirectAcpRequest,
-  startBootstrapAcpRequest,
+  startDirectAgentRequest,
+  startBootstrapAgentRequest,
 };

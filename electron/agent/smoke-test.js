@@ -146,7 +146,7 @@ check('ToolRegistry execute with invalid args', async () => {
 
 // Test agent-loop.js
 const { parseToolCallsFromResponse, extractResponseText } = require('./agent-loop');
-check('parseToolCallsFromResponse parses ACP segments', () => {
+check('parseToolCallsFromResponse parses agent segments', () => {
   const json = JSON.stringify({
     segments: [
       { type: 'tool', tool: 'shell', args: { command: 'ls' }, id: 'tc-1' },

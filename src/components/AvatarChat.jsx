@@ -1,4 +1,14 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
+
+function formatTime(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
 
 function AvatarChat({
   messages,
@@ -18,93 +28,118 @@ function AvatarChat({
   windowPrefs,
   onToggleAlwaysOnTop,
 }) {
-  const [input, setInput] = useState('');
+  const inputRef = useRef(null);
   const listRef = useRef(null);
-  const textareaRef = useRef(null);
 
+  // Auto-scroll to bottom on new messages
   useEffect(() => {
-    const container = listRef.current;
-    if (!container) return;
-    container.scrollTop = container.scrollHeight;
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages]);
 
-  async function submit(event) {
-    event?.preventDefault?.();
-    const text = input.trim();
+  // Auto-resize textarea
+  useEffect(() => {
+    const ta = inputRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 130) + 'px';
+  });
+
+  function submit() {
+    const ta = inputRef.current;
+    if (!ta) return;
+    const text = ta.value.trim();
     if (!text || isBusy) return;
-    setInput('');
-    textareaRef.current?.focus();
-    await onSend(text);
+    ta.value = '';
+    ta.style.height = 'auto';
+    ta.focus();
+    onSend(text);
   }
 
-  function handleKeyDown(event) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
       submit();
     }
   }
 
   const showWorkspaceCard = Boolean(
-    workspace
-    && (
-      workspace.bootstrapPending
-      || workspace.bootstrapActive
-    ),
+    workspace && (workspace.bootstrapPending || workspace.bootstrapActive),
   );
 
-  const streamBadge = streamStatus === 'streaming' ? 'streaming'
-    : streamStatus === 'connected' ? 'connected'
-    : streamStatus === 'wait' ? 'wait'
-    : streamStatus === 'speaking' ? 'speaking'
-    : streamStatus === 'error' ? 'error'
-    : 'off';
+  // Status dot
+  const dotClass = streamStatus === 'streaming' ? 'toolbar-status-dot-streaming'
+    : streamStatus === 'speaking'  ? 'toolbar-status-dot-speaking'
+    : streamStatus === 'connected' ? 'toolbar-status-dot-connected'
+    : streamStatus === 'error'     ? 'toolbar-status-dot-error'
+    : 'toolbar-status-dot-off';
+
+  const statusLabel = streamStatus === 'streaming' ? 'streaming'
+    : streamStatus === 'speaking'  ? 'speaking'
+    : streamStatus === 'connected' ? 'ready'
+    : streamStatus === 'error'     ? 'error'
+    : streamStatus === 'wait'      ? 'wait'
+    : 'offline';
+
+  const ttsLabel = ttsStatus && ttsStatus !== 'idle'
+    ? `${ttsStatus}${Number.isFinite(ttsLatencyMs) ? ` ${ttsLatencyMs}ms` : ''}`
+    : null;
 
   return (
     <div className="chat-shell">
 
       {/* ── Toolbar ───────────────────────────────────────────── */}
-      <div className="chat-toolbar" role="group" aria-label="Chat and window state controls">
-        <button
-          type="button"
-          className={`toolbar-pill ${windowPrefs.avatarAlwaysOnTop ? 'toolbar-pill-active' : ''}`}
-          onClick={() => onToggleAlwaysOnTop('avatar')}
-          title="Toggle avatar always-on-top"
-          aria-pressed={windowPrefs.avatarAlwaysOnTop}
-          aria-label={windowPrefs.avatarAlwaysOnTop ? 'Disable avatar always-on-top' : 'Enable avatar always-on-top'}
-        >
-          Avatar {windowPrefs.avatarAlwaysOnTop ? '📌' : '·'}
-        </button>
-        <button
-          type="button"
-          className={`toolbar-pill ${windowPrefs.chatAlwaysOnTop ? 'toolbar-pill-active' : ''}`}
-          onClick={() => onToggleAlwaysOnTop('chat')}
-          title="Toggle chat always-on-top"
-          aria-pressed={windowPrefs.chatAlwaysOnTop}
-          aria-label={windowPrefs.chatAlwaysOnTop ? 'Disable chat always-on-top' : 'Enable chat always-on-top'}
-        >
-          Chat {windowPrefs.chatAlwaysOnTop ? '📌' : '·'}
-        </button>
-        <div className="toolbar-pill" role="status" aria-live="polite" aria-label={`Stream status: ${streamBadge}`}>
-          {streamBadge === 'streaming' ? '⚡' : streamBadge === 'error' ? '✗' : '·'} {streamBadge}
-        </div>
-        {ttsStatus && ttsStatus !== 'idle' && (
-          <div className="toolbar-pill" role="status" aria-live="polite" aria-label={`TTS status: ${ttsStatus}${Number.isFinite(ttsLatencyMs) ? `, ${ttsLatencyMs} milliseconds` : ''}`}>
-            🔊 {ttsStatus}{Number.isFinite(ttsLatencyMs) ? ` ${ttsLatencyMs}ms` : ''}
-          </div>
+      <div className="chat-toolbar" role="group" aria-label="Chat controls">
+        <div className={`toolbar-status-dot ${dotClass}`} role="status" aria-label={`Status: ${statusLabel}`} />
+        <span className="toolbar-status-label">{statusLabel}{ttsLabel ? ` · ${ttsLabel}` : ''}</span>
+
+        {canStop && (
+          <button type="button" className="toolbar-stop-btn" onClick={onStop} aria-label="Stop">
+            ✕ stop
+          </button>
         )}
+
+        <div className="toolbar-spacer" />
+
         <button
           type="button"
-          className="toolbar-pill"
-          onClick={onOpenSettings}
-          aria-label="Open brain settings"
+          className={`toolbar-pin-btn${windowPrefs.avatarAlwaysOnTop ? ' toolbar-pin-btn-active' : ''}`}
+          onClick={() => onToggleAlwaysOnTop('avatar')}
+          aria-pressed={windowPrefs.avatarAlwaysOnTop}
+          title="Toggle avatar always-on-top"
         >
-          ⚙ Settings
+          avatar {windowPrefs.avatarAlwaysOnTop ? '📌' : '·'}
+        </button>
+
+        <button
+          type="button"
+          className={`toolbar-pin-btn${windowPrefs.chatAlwaysOnTop ? ' toolbar-pin-btn-active' : ''}`}
+          onClick={() => onToggleAlwaysOnTop('chat')}
+          aria-pressed={windowPrefs.chatAlwaysOnTop}
+          title="Toggle chat always-on-top"
+        >
+          chat {windowPrefs.chatAlwaysOnTop ? '📌' : '·'}
+        </button>
+
+        <button
+          type="button"
+          className="toolbar-icon-btn"
+          onClick={onOpenSettings}
+          aria-label="Settings"
+          title="Settings"
+        >
+          ⚙
         </button>
       </div>
 
       {/* ── Workspace bootstrap card ──────────────────────────── */}
       {showWorkspaceCard && (
-        <div className={`workspace-card ${workspace.bootstrapPending ? 'workspace-card-pending' : ''}`} role="region" aria-label="Workspace bootstrap status">
+        <div
+          className={`workspace-card ${workspace.bootstrapPending ? 'workspace-card-pending' : ''}`}
+          role="region"
+          aria-label="Workspace bootstrap status"
+        >
           <div className="workspace-header">
             <div>
               <div className="workspace-eyebrow">Workspace</div>
@@ -143,7 +178,10 @@ function AvatarChat({
           {workspace.files?.length > 0 && (
             <div className="workspace-file-list">
               {workspace.files.map((file) => (
-                <span key={file.name} className={`workspace-file-pill ${file.exists ? 'workspace-file-pill-live' : 'workspace-file-pill-missing'}`}>
+                <span
+                  key={file.name}
+                  className={`workspace-file-pill ${file.exists ? 'workspace-file-pill-live' : 'workspace-file-pill-missing'}`}
+                >
                   {file.name}
                 </span>
               ))}
@@ -169,8 +207,9 @@ function AvatarChat({
       {/* ── TTS error ─────────────────────────────────────────── */}
       {ttsStatus === 'error' && ttsLastError && (
         <div className="message message-system" role="alert">
-          <div className="message-role">tts error</div>
-          <div className="message-text">{ttsLastError}</div>
+          <div className="msg-bubble">
+            <div className="msg-text">TTS error: {ttsLastError}</div>
+          </div>
         </div>
       )}
 
@@ -181,79 +220,103 @@ function AvatarChat({
         role="log"
         aria-live="polite"
         aria-relevant="additions text"
-        aria-label="Conversation with Assistant"
+        aria-label="Conversation"
       >
         {messages.length === 0 && (
           <div className="message message-system">
-            <div className="message-role">system</div>
-            <div className="message-text">
-              Assistant is an autonomous agent — it uses the browser, desktop, or replies directly based on your request. Type to start.
+            <div className="msg-bubble">
+              <div className="msg-text">Scrivi qualcosa per iniziare.</div>
             </div>
           </div>
         )}
 
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`message message-${message.role}${message.streaming ? ' message-streaming-active' : ''}`}
-          >
-            <div className="message-role">
-              {message.role}
-              {message.streaming ? ' · streaming' : ''}
-              {message.interrupted ? ' · interrupted' : ''}
-            </div>
-            <div className="message-text">{message.text || (message.streaming ? '…' : '')}</div>
-            {message.meta && (
-              <div className="message-meta">
-                {[
-                  message.meta.emotion && `emotion: ${message.meta.emotion}`,
-                  message.meta.mood && `mood: ${message.meta.mood}`,
-                  message.meta.motion && `motion: ${message.meta.motion}`,
-                  message.meta.motionType && `type: ${message.meta.motionType}`,
-                ].filter(Boolean).join('  ·  ')}
+        {messages.map((msg) => {
+          if (msg.role === 'system') {
+            return (
+              <div key={msg.id} className="message message-system" role="status">
+                <div className="msg-bubble">
+                  <div className="msg-text">{msg.text || ''}</div>
+                </div>
               </div>
-            )}
-          </div>
-        ))}
+            );
+          }
 
-        {/* Typing indicator — visibile quando brain elabora ma non c'è ancora streaming */}
+          const isUser = msg.role === 'user';
+          const isStreaming = Boolean(msg.streaming);
+          const metaStr = msg.meta ? [
+            msg.meta.emotion && `${msg.meta.emotion}`,
+            msg.meta.gesture && `${msg.meta.gesture}`,
+            msg.meta.pose && `pose:${msg.meta.pose}`,
+          ].filter(Boolean).join(' · ') : null;
+
+          return (
+            <div
+              key={msg.id}
+              className={`message message-${msg.role}`}
+            >
+              {/* Avatar icon */}
+              <div className={`msg-avatar msg-avatar-${isUser ? 'user' : 'nyx'}`} aria-hidden="true">
+                {isUser ? 'Tu' : 'N'}
+              </div>
+
+              <div className="msg-content">
+                {isStreaming && (
+                  <div className="msg-streaming-label" aria-live="polite">
+                    {msg.interrupted ? 'interrotto' : 'scrive…'}
+                  </div>
+                )}
+                <div className="msg-bubble">
+                  <div className="msg-text">
+                    {msg.text || (isStreaming ? '' : '')}
+                    {isStreaming && <span className="stream-cursor" aria-hidden="true" />}
+                  </div>
+                </div>
+                <div className="msg-time">{formatTime(msg.ts)}</div>
+                {metaStr && <div className="msg-meta">{metaStr}</div>}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Typing indicator */}
         {isThinking && !messages.some((m) => m.streaming) && (
-          <div className="typing-indicator" role="status" aria-live="polite" aria-label="Assistant is thinking">
-            <div className="typing-dot" />
-            <div className="typing-dot" />
-            <div className="typing-dot" />
+          <div className="message message-assistant" role="status" aria-live="polite" aria-label="Assistant is thinking">
+            <div className="msg-avatar msg-avatar-nyx" aria-hidden="true">N</div>
+            <div className="msg-content">
+              <div className="msg-bubble">
+                <div className="typing-indicator">
+                  <div className="typing-dot" />
+                  <div className="typing-dot" />
+                  <div className="typing-dot" />
+                </div>
+              </div>
+            </div>
           </div>
         )}
       </div>
 
-      {/* ── Input form ────────────────────────────────────────── */}
-      <form className="chat-form" onSubmit={submit}>
+      {/* ── Input row (inline) ────────────────────────────────── */}
+      <div className="chat-input-row">
         <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
+          ref={inputRef}
+          className="chat-input-textarea"
+          rows={1}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message... (Enter to send · Shift+Enter for new line)"
-          rows={3}
           disabled={isBusy}
-          aria-label="Message for Nyx"
+          placeholder={isBusy ? 'Attendere…' : 'Scrivi… (Enter invia, Shift+Enter a capo)'}
+          aria-label="Messaggio per Nyx"
         />
-        <div className="chat-form-actions">
-          {canStop && (
-            <button type="button" className="secondary-button" onClick={onStop} aria-label="Stop current reply">
-              ✕ Stop
-            </button>
-          )}
-            <button
-              type="submit"
-              className="chat-send-btn"
-              disabled={isBusy || !input.trim()}
-              aria-label={isBusy ? 'Send disabled while Assistant is thinking' : 'Send message'}
-            >
-            {isBusy ? 'Processing...' : 'Send →'}
-          </button>
-        </div>
-      </form>
+        <button
+          type="button"
+          className="chat-send-icon-btn"
+          onClick={submit}
+          disabled={isBusy}
+          aria-label={isBusy ? 'Attendere' : 'Invia'}
+          title="Invia"
+        >
+          ↑
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,21 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'framer-motion';
 import { AvatarRuntimeAdapter } from '../avatar-runtime/adapter';
 
 /** Extra buffer after audio ends to ensure playback settles before notifying. */
 const PLAYBACK_END_BUFFER_MS = 180;
 
 function NyxAvatar() {
-  const prefersReducedMotion = useReducedMotion();
   const webviewRef = useRef(null);
   const playbackRef = useRef({
     requestId: null,
     segmentId: null,
     timerId: null,
   });
-  const statusClearTimerRef = useRef(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  const [statusText, setStatusText] = useState('');
   const avatarSrc = new URL('./talkinghead/index.html', window.location.href).toString();
 
   // Create the adapter instance once per component lifecycle
@@ -30,13 +26,6 @@ function NyxAvatar() {
         }
       },
     });
-  }
-
-  function clearStatusTimer() {
-    if (statusClearTimerRef.current) {
-      clearTimeout(statusClearTimerRef.current);
-      statusClearTimerRef.current = null;
-    }
   }
 
   // ─── Webview lifecycle ────────────────────────────────────────────────────
@@ -103,11 +92,9 @@ function NyxAvatar() {
       switch (data.cmd) {
         case 'speak': {
           clearPlaybackTimer('stopped');
-          clearStatusTimer();
           const requestId = String(data.requestId || '').trim();
           const segmentId = String(data.segmentId || '').trim();
           const expectedDurationMs = Math.max(500, Number(data.expectedDurationMs) || 0);
-          setStatusText(data.text || '');
 
           const actualDurationMs = await adapter.speak({
             text: data.text,
@@ -122,7 +109,6 @@ function NyxAvatar() {
           playbackRef.current.requestId = requestId;
           playbackRef.current.segmentId = segmentId;
           playbackRef.current.timerId = setTimeout(() => {
-            setStatusText('');
             notifyPlayback('ended', requestId, segmentId);
             playbackRef.current.timerId = null;
             playbackRef.current.requestId = null;
@@ -150,20 +136,10 @@ function NyxAvatar() {
         }
 
         case 'status': {
-          clearStatusTimer();
-          setStatusText(data.text || '');
-          if (data.text) {
-            statusClearTimerRef.current = setTimeout(() => {
-              setStatusText('');
-              statusClearTimerRef.current = null;
-            }, 3500);
-          }
           break;
         }
 
         case 'stop': {
-          setStatusText('');
-          clearStatusTimer();
           clearPlaybackTimer('stopped');
           await adapter.stop();
           break;
@@ -175,7 +151,6 @@ function NyxAvatar() {
     });
 
     return () => {
-      clearStatusTimer();
       clearPlaybackTimer('stopped');
       adapterRef.current?.cleanup();
       if (typeof unsubscribe === 'function') {
@@ -185,29 +160,14 @@ function NyxAvatar() {
   }, [isLoaded]);
 
   return (
-    <>
-      <webview
-        ref={webviewRef}
-        src={avatarSrc}
-        className="avatar-webview"
-        style={{ background: 'transparent', pointerEvents: 'none' }}
-        allowpopups="false"
-        nodeintegration="false"
-      />
-
-      {statusText && (
-        <motion.div
-          initial={prefersReducedMotion ? false : { opacity: 0, y: -18, scale: 0.94 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -10, scale: 0.96 }}
-          transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.22, ease: 'easeOut' }}
-          className="avatar-status-bubble"
-        >
-          <p>{statusText}</p>
-          <div className="avatar-status-caret" />
-        </motion.div>
-      )}
-    </>
+    <webview
+      ref={webviewRef}
+      src={avatarSrc}
+      className="avatar-webview"
+      style={{ background: 'transparent', pointerEvents: 'none' }}
+      allowpopups="false"
+      nodeintegration="false"
+    />
   );
 }
 

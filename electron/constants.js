@@ -1,4 +1,56 @@
 const path = require('path');
+const fs = require('fs');
+
+function loadLocalEnvFile() {
+  const envPath = path.join(__dirname, '..', '.env.local');
+  if (!fs.existsSync(envPath)) return;
+  try {
+    const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex <= 0) continue;
+      const key = trimmed.slice(0, eqIndex).trim();
+      const rawValue = trimmed.slice(eqIndex + 1).trim();
+      if (!key || process.env[key] !== undefined) continue;
+      process.env[key] = rawValue.replace(/^["']|["']$/g, '');
+    }
+  } catch {
+    // Ignore malformed local env files; explicit process.env still wins.
+  }
+}
+
+loadLocalEnvFile();
+
+// ============================================================
+// Workspace file definitions
+// ============================================================
+
+const WORKSPACE_REQUIRED_FILES = [
+  'IDENTITY.md',
+  'SOUL.md',
+  'AGENTS.md',
+  'TOOLS.md',
+  'USER.md',
+  'MEMORY.md',
+  'PERSONALITY.md',
+];
+
+const WORKSPACE_MUTABLE_FILES = [
+  'HEARTBEAT.md',
+  'BOOT.md',
+  'BOOTSTRAP.md',
+  'DREAMS.md',
+];
+
+const WORKSPACE_OPTIONAL_FILES = [
+  'HEARTBEAT.md',
+  'BOOT.md',
+  'BOOTSTRAP.md',
+  'DREAMS.md',
+  'MEMORY.md',
+];
 
 // ============================================================
 // Environment defaults
@@ -24,8 +76,6 @@ function envBool(key, fallback) {
 // ============================================================
 
 const APP_DATA_NPM = path.join(process.env.APPDATA || '', 'npm');
-const QWEN_PS1_PATH = path.join(APP_DATA_NPM, 'qwen.ps1');
-const QWEN_CLI_JS_PATH = path.join(APP_DATA_NPM, 'node_modules', '@qwen-code', 'qwen-code', 'cli.js');
 const PINCHTAB_PS1_PATH = path.join(APP_DATA_NPM, 'pinchtab.ps1');
 const PINCHTAB_CLI_PATH = path.join(APP_DATA_NPM, 'node_modules', 'pinchtab', 'bin', 'pinchtab');
 
@@ -39,7 +89,7 @@ const KOKORO_SERVER_SCRIPT = path.join(__dirname, '..', 'electron', 'kokoro_tts_
 // Timeouts (ms)
 // ============================================================
 
-const ACP_TIMEOUT_MS = envNum('AVATAR_ACP_TIMEOUT_MS', 120000);
+const AGENT_TIMEOUT_MS = envNum('AVATAR_AGENT_TIMEOUT_MS', 120000);
 const COMPUTER_ACTION_TIMEOUT_MS = envNum('AVATAR_COMPUTER_ACTION_TIMEOUT_MS', 20000);
 const PINCHTAB_STARTUP_TIMEOUT_MS = envNum('PINCHTAB_STARTUP_TIMEOUT_MS', 45000);
 const PYWINAUTO_MCP_STARTUP_TIMEOUT_MS = envNum('PYWINAUTO_MCP_STARTUP_TIMEOUT_MS', 120000);
@@ -75,8 +125,8 @@ const MAX_CHAT_HISTORY = 200;
 const MAX_INITIAL_PROMPT_HISTORY = 4;
 const BROWSER_AGENT_HARD_LIMIT = Math.max(8, envNum('AVATAR_BROWSER_AGENT_HARD_LIMIT', 64));
 const COMPUTER_OCR_MAX_CHARS = envNum('AVATAR_COMPUTER_OCR_MAX_CHARS', 1200);
-const WORKSPACE_FILE_MAX_CHARS = envNum('NYX_WORKSPACE_FILE_MAX_CHARS', 4000);
-const WORKSPACE_TOTAL_MAX_CHARS = envNum('NYX_WORKSPACE_TOTAL_MAX_CHARS', 24000);
+const WORKSPACE_FILE_MAX_CHARS = envNum('NYX_WORKSPACE_FILE_MAX_CHARS', 10000);
+const WORKSPACE_TOTAL_MAX_CHARS = envNum('NYX_WORKSPACE_TOTAL_MAX_CHARS', 80000);
 const WORKSPACE_DAILY_NOTE_MAX_CHARS = envNum('NYX_WORKSPACE_DAILY_NOTE_MAX_CHARS', 1500);
 const SESSION_SEARCH_MAX_RESULTS = envNum('NYX_SESSION_SEARCH_MAX_RESULTS', 5);
 const MEMORY_SEARCH_MAX_RESULTS = envNum('NYX_MEMORY_SEARCH_MAX_RESULTS', 5);
@@ -153,9 +203,12 @@ const KOKORO_PYTHON = env('KOKORO_PYTHON', '');
 // Brain
 // ============================================================
 
-const DEFAULT_BRAIN_ID = 'qwen';
-const DEFAULT_OLLAMA_MODEL = env('NYX_OLLAMA_MODEL', 'qwen3.5:0.8b');
-const PREFERRED_OLLAMA_MODELS = ['qwen3.5:0.8b', 'llama3.2:1b', 'qwen3:1.7b'];
+const DEFAULT_BRAIN_ID = 'opencode';
+const DEFAULT_OLLAMA_MODEL = env('NYX_OLLAMA_MODEL', 'llama3.2:1b');
+const PREFERRED_OLLAMA_MODELS = ['llama3.2:1b', 'llama3.1:8b'];
+const OPENCODE_API_KEY = env('OPENCODE_API_KEY', '');
+const OPENCODE_BASE_URL = env('OPENCODE_BASE_URL', 'https://opencode.ai/zen/v1');
+const OPENCODE_MODEL = env('OPENCODE_MODEL', 'minimax-m2.5-free');
 
 // ============================================================
 // Feature flags
@@ -170,8 +223,6 @@ const ENABLE_LIVE_CANVAS = envBool('NYX_ENABLE_LIVE_CANVAS', true);
 const WORKSPACE_DIRNAME = 'workspace';
 const WORKSPACE_DAILY_MEMORY_DIRNAME = 'memory';
 const SESSIONS_DIRNAME = 'sessions';
-const WORKSPACE_REQUIRED_FILES = ['AGENTS.md', 'SOUL.md', 'TOOLS.md', 'IDENTITY.md', 'USER.md', 'HEARTBEAT.md'];
-const WORKSPACE_MUTABLE_FILES = ['USER.md', 'SOUL.md', 'IDENTITY.md', 'MEMORY.md', 'memory.md'];
 
 // ============================================================
 // Avatar
@@ -272,18 +323,18 @@ const STREAM_EMITTER_EMA_ALPHA = 0.8;
 const REASONING_TAG_NAMES = ['think', 'thought', 'reasoning', 'analysis', 'internal', 'plan'];
 
 const EMOTION_TO_AVATAR_STYLE = {
-  happy: { mood: 'happy', expression: 'happy', motion: null, motionType: null },
+  happy: { mood: 'happy', expression: 'happy', motion: 'thumbup', motionType: 'gesture' },
   sad: { mood: 'sad', expression: 'sad', motion: 'sitting', motionType: 'pose' },
   angry: { mood: 'angry', expression: 'angry', motion: 'side', motionType: 'pose' },
-  think: { mood: 'think', expression: 'think', motion: null, motionType: null },
+  think: { mood: 'think', expression: 'think', motion: 'index', motionType: 'gesture' },
   surprised: { mood: 'surprised', expression: 'surprised', motion: 'surprised_hands', motionType: 'gesture' },
-  awkward: { mood: 'neutral', expression: 'neutral', motion: null, motionType: null },
-  question: { mood: 'curious', expression: 'think', motion: null, motionType: null },
-  curious: { mood: 'curious', expression: 'curious', motion: null, motionType: null },
+  awkward: { mood: 'neutral', expression: 'neutral', motion: 'shrug', motionType: 'gesture' },
+  question: { mood: 'curious', expression: 'think', motion: 'index', motionType: 'gesture' },
+  curious: { mood: 'curious', expression: 'curious', motion: 'index', motionType: 'gesture' },
   neutral: { mood: 'neutral', expression: 'neutral', motion: null, motionType: null },
   fear: { mood: 'fear', expression: 'fear', motion: 'side', motionType: 'pose' },
   disgust: { mood: 'disgust', expression: 'disgust', motion: 'side', motionType: 'pose' },
-  love: { mood: 'love', expression: 'happy', motion: null, motionType: null },
+  love: { mood: 'love', expression: 'happy', motion: 'namaste', motionType: 'gesture' },
   sleep: { mood: 'sleep', expression: 'sleep', motion: 'sitting', motionType: 'pose' },
 };
 
@@ -412,13 +463,13 @@ const PINCHTAB_LOCK_FILE = path.join('Default', 'LOCK');
 // ============================================================
 
 const BRAIN_REGISTRY = {
-  qwen: {
-    label: 'Qwen',
-    description: 'Qwen Code CLI',
-    command: 'qwen',
-    args: (prompt) => [prompt],
-    supportsSessionResume: true,
-    acpCommand: 'qwen --acp --channel ACP',
+  opencode: {
+    label: 'OpenCode Zen',
+    description: 'MiniMax M2.5 Free via OpenCode Zen API',
+    command: 'opencode-zen',
+    args: () => [],
+    supportsSessionResume: false,
+    AgentCommand: '',
     selectable: true,
   },
   ollama: {
@@ -427,7 +478,7 @@ const BRAIN_REGISTRY = {
     command: 'ollama',
     args: (prompt, config = {}) => ['run', String(config.model || 'llama3.1').trim() || 'llama3.1', prompt],
     supportsSessionResume: false,
-    acpCommand: '',
+    AgentCommand: '',
     selectable: true,
   },
 };
@@ -487,15 +538,7 @@ const CANVAS_ACTION_LINE_PATTERNS = [
 // Preference extraction regex
 // ============================================================
 
-const PREFERENCE_KEYWORDS = /\b(voglio|usa|usare|deve|non|separa|centr|chat|avatar|nyxavatar|animazioni|gesture|finestr|trasparente|acp|tts|lipsync)\b/i;
-
-// ============================================================
-// ACP protocol
-// ============================================================
-
-const ACP_PROTOCOL_VERSION = 1;
-const ACP_CLIENT_NAME = 'avatar-acp-desktop';
-const ACP_CLIENT_VERSION = '0.1.0';
+const PREFERENCE_KEYWORDS = /\b(voglio|usa|usare|deve|non|separa|centr|chat|avatar|nyxavatar|animazioni|gesture|finestr|trasparente|Agent|tts|lipsync)\b/i;
 
 // ============================================================
 // PinchTab config
@@ -514,8 +557,6 @@ module.exports = {
   envBool,
 
   // Paths
-  QWEN_PS1_PATH,
-  QWEN_CLI_JS_PATH,
   PINCHTAB_PS1_PATH,
   PINCHTAB_CLI_PATH,
   AGENT_ROUTER_ROOT,
@@ -524,7 +565,7 @@ module.exports = {
   KOKORO_SERVER_SCRIPT,
 
   // Timeouts
-  ACP_TIMEOUT_MS,
+  AGENT_TIMEOUT_MS,
   COMPUTER_ACTION_TIMEOUT_MS,
   PINCHTAB_STARTUP_TIMEOUT_MS,
   PYWINAUTO_MCP_STARTUP_TIMEOUT_MS,
@@ -629,6 +670,9 @@ module.exports = {
   DEFAULT_BRAIN_ID,
   DEFAULT_OLLAMA_MODEL,
   PREFERRED_OLLAMA_MODELS,
+  OPENCODE_API_KEY,
+  OPENCODE_BASE_URL,
+  OPENCODE_MODEL,
 
   // Feature flags
   ENABLE_LIVE_CANVAS,
@@ -731,11 +775,6 @@ module.exports = {
 
   // Preferences
   PREFERENCE_KEYWORDS,
-
-  // ACP
-  ACP_PROTOCOL_VERSION,
-  ACP_CLIENT_NAME,
-  ACP_CLIENT_VERSION,
 
   // PinchTab config
   PINCHTAB_CONFIG_VERSION,

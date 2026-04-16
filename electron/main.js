@@ -41,7 +41,6 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 // These modules extract and fix the issues identified in the code review:
 // - constants.js: All magic numbers extracted as named constants
 // - state-manager.js: Race condition fixes with ChatRequestManager lock
-// - acp-runtime.js: Qwen ACP runtime with memory leak prevention
 // - tts-service.js: Kokoro TTS with response caching
 // - browser-agent.js: PinchTab browser automation
 // - computer-control.js: PowerShell/computer use with injection fixes + fetch-based Ollama probe
@@ -53,7 +52,6 @@ app.commandLine.appendSwitch('disable-gpu-sandbox');
 // ============================================================
 const C = require('./constants');
 const { ChatRequestManager, PlaybackWaiterManager, SpeechResetManager, StatusManager } = require('./state-manager');
-const { QwenAcpRuntime } = require('./acp-runtime');
 const { TtsService } = require('./tts-service');
 const {
   createMessageId,
@@ -72,7 +70,7 @@ const {
   getBootstrapMissingFieldIds,
   getBootstrapInitialPrompt,
   buildBootstrapAnswersPrompt,
-  updateBootstrapStateFromAcp,
+  updateBootstrapStateFromAgent,
 } = require('./workspace-manager');
 const {
   runShellCommand,
@@ -109,6 +107,12 @@ const {
   listOllamaModels,
 } = require('./ollama-client');
 const {
+  createOpenCodeChatCompletion,
+  extractOpenCodeText,
+} = require('./opencode-client');
+const { normalizeModelOutput } = require('./model-output-normalizer');
+const { logModelOutput, logParseResult, logToolExecution, logAvatarCommand } = require('./debug-logger');
+const {
   createDefaultTaskState,
   handleTaskAction,
   getTaskSummary,
@@ -126,14 +130,14 @@ const {
 } = require('./circuit-breaker');
 const {
   createDefaultDreamState,
-  onUserInteraction,
   scheduleDream,
-  analyzeConversation,
+  onUserInteraction,
   generateDreamNote,
   saveDreamNote,
   cleanupOldDreams,
   stopDream,
   getDreamStatus,
+  runMemoryMaintenance,
   DREAM_IDLE_TIMEOUT_MS,
 } = require('./dream-mode');
 const {
@@ -160,14 +164,16 @@ const {
 } = require('./response-parser');
 const playback = require('./avatar-playback');
 const orchestrator = require('./agent-orchestrator');
+const { createChatCommands } = require('./chat-commands');
+const { createToolExecutor } = require('./tool-executor');
 
 // ============================================================
 // Initialize Orchestrator and Playback Bridges
 // ============================================================
 
 const {
-  buildDirectAcpPrompt,
-  buildBootstrapAcpPrompt,
+  buildDirectAgentPrompt,
+  buildBootstrapAgentPrompt,
   buildAutoToolBatchStartText,
   buildAutoToolBatchCompleteText,
   buildToolResultPrompt,
@@ -180,7 +186,7 @@ const orchestratorContext = {
   setActiveResponseId: (val) => { activeResponseId = val; },
   activeChatRequest: () => activeChatRequest,
   setActiveChatRequest: (val) => { activeChatRequest = val; },
-  runAcpTurn: (...args) => runAcpTurn(...args),
+  runAgentTurn: (...args) => runAgentTurn(...args),
   normalizeLegacyResponseToPhasePlan,
   emitPhaseStreamEvent: (...args) => emitPhaseStreamEvent(...args),
   createMessageId,
@@ -214,11 +220,11 @@ const orchestratorContext = {
   setTtsState: (...args) => setTtsState(...args),
   STREAM_STATUS: C.STREAM_STATUS,
   refreshComputerState: () => refreshComputerState({ updateComputerState }),
-  buildDirectAcpPrompt: (userText) => buildDirectAcpPrompt(userText, {
+  buildDirectAgentPrompt: (userText) => buildDirectAgentPrompt(userText, {
     app,
     chatHistory,
     nyxMemory,
-    acpSession,
+    agentSession,
     personalityState,
     getPersonalityPrompt,
     workspaceState,
@@ -226,15 +232,15 @@ const orchestratorContext = {
     canvasState,
     computerState,
   }),
-  prepareAcpSessionTurn: () => prepareAcpSessionTurn(),
+  prepareAgentSessionTurn: () => prepareAgentSessionTurn(),
   getBrainSpawnConfig: (...args) => getBrainSpawnConfig(...args),
   sendAvatarCommand: (...args) => sendAvatarCommand(...args),
   agentLoop: (...args) => orchestrator.agentLoop(...args),
-  markAcpSessionTurnCompleted: (...args) => markAcpSessionTurnCompleted(...args),
+  markAgentSessionTurnCompleted: (...args) => markAgentSessionTurnCompleted(...args),
   consumeStartupBootPrompt: () => consumeStartupBootPrompt(),
-  resetAcpSession: (...args) => resetAcpSession(...args),
+  resetAgentSession: (...args) => resetAgentSession(...args),
   stopActiveChatRequest: (...args) => stopActiveChatRequest(...args),
-  buildBootstrapAcpPrompt: (userText, options) => buildBootstrapAcpPrompt(userText, options, {
+  buildBootstrapAgentPrompt: (userText, options) => buildBootstrapAgentPrompt(userText, options, {
     app,
     bootstrapState,
   }),
@@ -242,6 +248,26 @@ const orchestratorContext = {
   createStreamEmitter: (...args) => createStreamEmitter(...args),
   sanitizeGenericOutput: (text) => sanitizeGenericOutput(text),
 };
+
+const chatCommands = createChatCommands({
+  app,
+  getBootstrapState: () => bootstrapState,
+  getWorkspaceState: () => workspaceState,
+  getChatSession: () => chatSession,
+  getChatHistory: () => chatHistory,
+  getAgentSession: () => agentSession,
+  completeWorkspaceBootstrapFn: completeWorkspaceBootstrap,
+  openWorkspaceFolderFn: (app) => ({ message: require('electron').shell.openPath(getWorkspacePath()) || 'done' }),
+  appendSessionFlushFn: (messages, reason) => appendSessionFlushToDailyMemory(app, chatSession, messages, reason),
+  compactCurrentSessionHistoryFn: compactCurrentSessionHistory,
+  startFreshSessionFn: startFreshSession,
+});
+
+const toolExecutor = createToolExecutor({
+  app,
+  getActiveResponseId: () => activeResponseId,
+  getWorkspaceState: () => workspaceState,
+});
 
 orchestrator.setupOrchestrator(orchestratorContext);
 
@@ -256,6 +282,7 @@ const {
 } = require('./hooks');
 const {
   smartPrune,
+  needsPreFlush,
   getContextStats,
   MAX_CONTEXT_TOKENS,
 } = require('./session-pruning');
@@ -320,9 +347,7 @@ const {
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 // Constants now available from ./constants.js (C.* references)
 // Keeping inline for backward compatibility - migrate gradually
-const ACP_TIMEOUT_MS = C.ACP_TIMEOUT_MS;
-const QWEN_PS1_PATH = C.QWEN_PS1_PATH;
-const QWEN_CLI_JS_PATH = C.QWEN_CLI_JS_PATH;
+const AGENT_TIMEOUT_MS = C.AGENT_TIMEOUT_MS;
 const AGENT_ROUTER_PATH = C.AGENT_ROUTER_PATH;
 const AGENT_MODELS_CONFIG_PATH = C.AGENT_MODELS_CONFIG_PATH;
 const PINCHTAB_PS1_PATH = C.PINCHTAB_PS1_PATH;
@@ -368,6 +393,9 @@ const REASONING_TAG_NAMES = C.REASONING_TAG_NAMES;
 const DEFAULT_BRAIN_ID = C.DEFAULT_BRAIN_ID;
 const DEFAULT_OLLAMA_HOST = C.OLLAMA_HOST;
 const DEFAULT_OLLAMA_MODEL = C.DEFAULT_OLLAMA_MODEL;
+const OPENCODE_API_KEY = C.OPENCODE_API_KEY;
+const OPENCODE_BASE_URL = C.OPENCODE_BASE_URL;
+const OPENCODE_MODEL = C.OPENCODE_MODEL;
 const BRAIN_REGISTRY = C.BRAIN_REGISTRY;
 const STREAM_STATUS = C.STREAM_STATUS;
 
@@ -376,7 +404,7 @@ function createEmptyMemory() {
   return { updatedAt: '', summary: '', stablePreferences: [], recentTopics: [] };
 }
 
-function createEmptyAcpSession() {
+function createEmptyAgentSession() {
   return { id: '', createdAt: '', lastUsedAt: '', turnCount: 0 };
 }
 
@@ -398,7 +426,7 @@ let ttsLastError = null;
 let persistWindowStateTimer = null;
 let chatHistory = [];
 let nyxMemory = createEmptyMemory();
-let acpSession = createEmptyAcpSession();
+let agentSession = createEmptyAgentSession();
 let chatSession = createEmptyChatSession();
 let activeChatRequest = null;
 let activeResponseId = null;
@@ -409,18 +437,12 @@ let canvasStatusLoop = null;
 let cleanupStarted = false;
 let ttsServiceLogTail = '';
 let ttsWarmupTimer = null;
-let qwenAcpStderrTail = '';
 
 let taskState = createDefaultTaskState();
 let circuitBreakerState = createDefaultCircuitBreakerState();
 let dreamState = createDefaultDreamState();
 let personalityState = createDefaultPersonalityState();
 let promptCacheState = createDefaultPromptCacheState();
-
-function appendQwenAcpStderr(text) {
-  const line = String(text || '').replace(/\u001b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
-  qwenAcpStderrTail = `${qwenAcpStderrTail}\n${line}`.trim().slice(-2000);
-}
 
 function sanitizeCliOutput(text, brainId = '') {
   const raw = String(text || '');
@@ -442,30 +464,6 @@ let computerState = createDefaultComputerState();
 let workspaceState = createDefaultWorkspaceState();
 let brainState = createDefaultBrainState();
 let brainSessionHints = {};
-function createQwenAcpRuntime() {
-  const selectedBrain = getSelectedBrainOption();
-  const useNodeLauncher = fs.existsSync(QWEN_CLI_JS_PATH);
-  const launcherCommand = useNodeLauncher
-    ? 'node'
-    : String(selectedBrain?.commandPath || BRAIN_REGISTRY.qwen.command || 'qwen');
-  const launcherArgs = useNodeLauncher
-    ? [QWEN_CLI_JS_PATH, '--acp', '--channel', 'ACP']
-    : ['--acp', '--channel', 'ACP'];
-
-  return new QwenAcpRuntime({
-    cwd: path.join(__dirname, '..'),
-    reasoningTagNames: REASONING_TAG_NAMES,
-    requestTimeoutMs: ACP_TIMEOUT_MS,
-    launcherCommand,
-    launcherArgs,
-    onStderrAppend: appendQwenAcpStderr,
-    onStreamChunk: (delta) => {
-      activeChatRequest?.streamEmitter?.queue(delta);
-    },
-  });
-}
-
-let qwenAcpRuntime = null;
 let bootstrapState = createDefaultBootstrapState();
 let avatarPlaybackWaiters = new Map();
 
@@ -600,7 +598,21 @@ function createDefaultWorkspaceState() {
 async function getBrainSpawnConfig(prompt, sessionConfig = {}, overrideBrain = null) {
   const selectedBrain = overrideBrain || getSelectedBrainOption();
 
-  // Ollama usa API HTTP, non ACP
+  if (selectedBrain?.id === 'opencode') {
+    return {
+      brainId: 'opencode',
+      kind: 'opencode-http',
+      url: OPENCODE_BASE_URL,
+      model: OPENCODE_MODEL,
+      apiKey: OPENCODE_API_KEY,
+      launcherLabel: `OpenCode Zen ${OPENCODE_MODEL}`,
+      supportsSessionResume: false,
+      shell: false,
+      env: process.env,
+    };
+  }
+
+  // Ollama usa API HTTP, non Agent
   if (selectedBrain?.id === 'ollama') {
     return {
       brainId: selectedBrain.id,
@@ -610,17 +622,6 @@ async function getBrainSpawnConfig(prompt, sessionConfig = {}, overrideBrain = n
       launcherLabel: `ollama@${String(brainState.ollama?.host || createDefaultBrainState().ollama.host)}`,
       supportsSessionResume: false,
       shell: false,
-      env: process.env,
-    };
-  }
-
-  // Qwen usa ACP nativo con --acp --channel ACP
-  if (selectedBrain?.id === 'qwen') {
-    return {
-      brainId: 'qwen',
-      kind: 'qwen-acp',
-      launcherLabel: selectedBrain.commandPath || (fs.existsSync(QWEN_CLI_JS_PATH) ? `node ${QWEN_CLI_JS_PATH}` : (selectedBrain.commandPath || BRAIN_REGISTRY.qwen.command)),
-      supportsSessionResume: true,
       env: process.env,
     };
   }
@@ -642,8 +643,8 @@ function getChatHistoryPath() {
   return getAppFilePath('chat-history.json');
 }
 
-function getAcpSessionPath() {
-  return getAppFilePath('acp-session.json');
+function getAgentSessionPath() {
+  return getAppFilePath('agent-session.json');
 }
 
 function getChatSessionPath() {
@@ -656,6 +657,10 @@ function getBootstrapStatePath() {
 
 function getNyxMemoryPath() {
   return getAppFilePath('nyx-memory.json');
+}
+
+function getAppVersionStatePath() {
+  return getAppFilePath('app-version.json');
 }
 
 function getSessionRecordPath(sessionId) {
@@ -753,153 +758,6 @@ function markBrainSessionActive(brainId) {
 
 function resetBrainRuntimeState() {
   brainSessionHints = {};
-  qwenAcpRuntime?.clearLoadedSessionId();
-}
-
-// waitForLocalPort, appendQwenAcpStderr, syncAcpSessionToQwen
-// moved to acp-runtime.js - main.js now uses thin wrappers around QwenAcpRuntime
-
-function stopQwenAcpRuntime(silent = false) {
-  qwenAcpRuntime?.stop(silent);
-  qwenAcpRuntime = null;
-}
-
-function qwenAcpSendNotification(method, params = null) {
-  if (!qwenAcpRuntime) {
-    throw new Error('Qwen ACP non disponibile.');
-  }
-  qwenAcpRuntime.sendNotification(method, params);
-}
-
-function qwenAcpSendRequest(method, params = null, timeoutMs = ACP_TIMEOUT_MS) {
-  if (!qwenAcpRuntime) {
-    return Promise.reject(new Error('Qwen ACP non disponibile.'));
-  }
-  return qwenAcpRuntime.sendRequest(method, params, timeoutMs);
-}
-
-async function ensureQwenAcpRuntime() {
-  const hasLiveRuntime = Boolean(qwenAcpRuntime?.proc && !qwenAcpRuntime.proc.killed);
-  if (!hasLiveRuntime) {
-    qwenAcpRuntime = createQwenAcpRuntime();
-  }
-  await qwenAcpRuntime.ensure();
-  return qwenAcpRuntime;
-}
-
-async function ensureQwenAcpSession(sessionConfig = {}) {
-  await ensureQwenAcpRuntime();
-
-  // Se c'è già una sessione caricata, riutilizzala
-  const sessionId = await qwenAcpRuntime.ensureSession();
-  syncAcpSessionToQwen(sessionId, true);
-  return sessionId;
-}
-
-async function runQwenAcpTurn(requestId, prompt, userText, sessionConfig, options = {}) {
-  await ensureQwenAcpRuntime();
-  let sessionId = '';
-  try {
-    sessionId = await ensureQwenAcpSession(sessionConfig);
-  } catch (error) {
-    // Se fallisce, resetta e riprova una volta sola
-    if (!options.qwenSessionResetAttempted) {
-      resetAcpSession(sessionConfig.id);
-      qwenAcpRuntime?.clearLoadedSessionId();
-      return runQwenAcpTurn(requestId, prompt, userText, prepareAcpSessionTurn(), {
-        ...options,
-        qwenSessionResetAttempted: true,
-      });
-    }
-    throw error;
-  }
-
-  const controller = new AbortController();
-  if (!activeChatRequest || activeChatRequest.id !== requestId) {
-    activeChatRequest = {
-      id: requestId,
-      proc: null,
-      abortController: controller,
-      cancelFn: async () => {
-        if (sessionId) {
-          qwenAcpSendNotification('session/cancel', { sessionId });
-        }
-      },
-      cancelled: false,
-      buffer: '',
-      preview: '',
-      acpSessionId: sessionId,
-      acpSessionNew: sessionConfig.isNew,
-      streamEmitter: createStreamEmitter(requestId),
-    };
-  } else {
-    activeChatRequest.proc = null;
-    activeChatRequest.abortController = controller;
-    activeChatRequest.cancelFn = async () => {
-      if (sessionId) {
-        qwenAcpSendNotification('session/cancel', { sessionId });
-      }
-    };
-    activeChatRequest.buffer = '';
-    activeChatRequest.preview = '';
-    activeChatRequest.acpSessionId = sessionId;
-    activeChatRequest.acpSessionNew = sessionConfig.isNew;
-  }
-
-  const timer = setTimeout(() => {
-    stopActiveChatRequest('timeout');
-  }, ACP_TIMEOUT_MS);
-
-  try {
-    const turnResult = await qwenAcpRuntime.runTurn(requestId, prompt, {
-      sessionId,
-      isNewSession: Boolean(sessionConfig.isNew),
-      streamPreview: Boolean(options.streamPreview),
-    });
-
-    clearTimeout(timer);
-    if (activeChatRequest?.id === requestId) {
-      activeChatRequest.proc = null;
-      activeChatRequest.abortController = null;
-      activeChatRequest.cancelFn = null;
-    }
-
-    if (isRequestCancelled(requestId)) {
-      const cancelledError = new Error(activeChatRequest?.stopReason === 'timeout' ? 'timeout' : 'cancelled');
-      cancelledError.code = activeChatRequest?.stopReason || 'cancelled';
-      throw cancelledError;
-    }
-
-    const buffer = String(turnResult?.buffer || '').trim();
-    const response = parseInlineResponse(buffer, userText, { strictJson: options.strictJson === true });
-    const phasePlan = parsePhasePlan(buffer, userText, { strictJson: options.strictJson === true });
-    if (turnResult?.reasoning && !response.reasoning) {
-      response.reasoning = normalizeLine(turnResult.reasoning, 4000);
-    }
-
-    return {
-      buffer,
-      response,
-      phasePlan,
-      sessionId: turnResult?.sessionId || sessionId,
-      stopReason: turnResult?.stopReason || 'end_turn',
-    };
-  } catch (error) {
-    clearTimeout(timer);
-    if (activeChatRequest?.id === requestId) {
-      activeChatRequest.proc = null;
-      activeChatRequest.abortController = null;
-      activeChatRequest.cancelFn = null;
-    }
-
-    if (error?.name === 'AbortError') {
-      const cancelledError = new Error(activeChatRequest?.stopReason === 'timeout' ? 'timeout' : 'cancelled');
-      cancelledError.code = activeChatRequest?.stopReason || 'cancelled';
-      throw cancelledError;
-    }
-
-    throw error;
-  }
 }
 
 function normalizeOllamaHost(input) {
@@ -960,14 +818,14 @@ function buildBrainCatalog(ollamaConfig = null) {
     .map((id) => {
       const registryEntry = BRAIN_REGISTRY[id];
       const parsed = parsedAgents.find((item) => item.id === id);
-      const commandPath = id === 'ollama'
-        ? ollamaHost
-        : (id === 'qwen'
-        ? (fs.existsSync(QWEN_CLI_JS_PATH) ? QWEN_CLI_JS_PATH : (fs.existsSync(QWEN_PS1_PATH) ? QWEN_PS1_PATH : ''))
-        : findCommandPath(registryEntry.command));
-      const available = id === 'ollama'
-        ? Boolean(cachedOllamaStatus.reachable && cachedOllamaStatus.modelAvailable)
-        : Boolean(commandPath);
+      const commandPath = id === 'opencode'
+        ? `${OPENCODE_BASE_URL} · ${OPENCODE_MODEL}`
+        : (id === 'ollama' ? ollamaHost : findCommandPath(registryEntry.command));
+      const available = id === 'opencode'
+        ? Boolean(OPENCODE_API_KEY)
+        : (id === 'ollama'
+          ? Boolean(cachedOllamaStatus.reachable && cachedOllamaStatus.modelAvailable)
+          : Boolean(commandPath));
 
       return {
         id,
@@ -980,7 +838,9 @@ function buildBrainCatalog(ollamaConfig = null) {
           ? (cachedOllamaStatus.reachable
             ? (cachedOllamaStatus.modelAvailable ? `model ok: ${ollamaModel}` : `model mancante: ${ollamaModel}`)
             : (cachedOllamaStatus.error || 'host non raggiungibile'))
-          : '',
+          : (id === 'opencode'
+            ? (OPENCODE_API_KEY ? `model ok: ${OPENCODE_MODEL}` : 'OPENCODE_API_KEY mancante')
+            : ''),
       };
     })
     .map((item) => item.id === 'ollama'
@@ -1014,7 +874,7 @@ function refreshBrainState() {
   };
 
   if (brainState.ollamaStatus.reachable && !brainState.ollamaStatus.modelAvailable) {
-    const preferredModel = ['qwen3.5:0.8b', 'llama3.2:1b', 'qwen3:1.7b']
+    const preferredModel = ['llama3.2:1b', 'llama3.1:8b']
       .find((candidate) => brainState.ollamaStatus.availableModels.includes(candidate));
     if (preferredModel && preferredModel !== brainState.ollama.model) {
       brainState.ollama = {
@@ -1048,11 +908,11 @@ function getSelectedBrainOption() {
     || brainState.options[0]
     || {
       id: DEFAULT_BRAIN_ID,
-      label: 'Qwen',
-      description: 'Qwen Code CLI',
+      label: 'OpenCode Zen',
+      description: 'MiniMax M2.5 Free via OpenCode Zen API',
       available: false,
-      commandPath: QWEN_CLI_JS_PATH,
-      supportsSessionResume: true,
+      commandPath: OPENCODE_BASE_URL,
+      supportsSessionResume: false,
     };
 }
 
@@ -1076,7 +936,7 @@ function setSelectedBrain(brainId) {
   persistBrainState();
   setStreamStatus(next.available ? STREAM_STATUS.CONNECTED : STREAM_STATUS.DISCONNECTED);
   if (currentStatus !== 'thinking' && currentStatus !== 'speaking' && currentStatus !== 'tts-loading') {
-    setBrainMode(next.available ? 'direct-acp-ready' : 'direct-acp-missing');
+    setBrainMode(next.available ? 'direct-agent-ready' : 'direct-agent-missing');
   } else {
     broadcastStatus();
   }
@@ -1124,6 +984,20 @@ async function testBrainSelection(brainId = '') {
     };
   }
 
+  if (launch.kind === 'opencode-http') {
+    const payload = await createOpenCodeChatCompletion({
+      baseUrl: launch.url,
+      apiKey: launch.apiKey,
+      model: launch.model,
+      messages: [{ role: 'user', content: 'Rispondi solo con OK.' }],
+    });
+    return {
+      ok: true,
+      brainId: targetBrain.id,
+      message: normalizeLine(extractOpenCodeText(payload) || 'OK', 160),
+    };
+  }
+
   if (launch.kind === 'ollama-http') {
     const status = await probeOllamaStatus(launch.url, launch.model);
     if (!status.reachable) {
@@ -1134,12 +1008,6 @@ async function testBrainSelection(brainId = '') {
     }
     const payload = await generateOllamaResponse(launch.url, launch.model, 'Rispondi solo con OK.');
     return { ok: true, brainId: targetBrain.id, message: normalizeLine(payload?.response || 'OK', 160) };
-  }
-
-  if (launch.kind === 'qwen-acp') {
-    await ensureQwenAcpRuntime();
-    const sessionId = await ensureQwenAcpSession({});
-    return { ok: true, brainId: targetBrain.id, message: `ACP ready: ${sessionId}` };
   }
 
   return { ok: false, brainId: targetBrain.id, message: `Kind unsupported: ${launch.kind}` };
@@ -1289,7 +1157,7 @@ function consumeStartupBootPrompt() {
 
 
 
-// updateBootstrapStateFromAcp, buildBootstrapAcpPrompt, buildPromptRecallBlock,
+// updateBootstrapStateFromAgent, buildBootstrapAgentPrompt, buildPromptRecallBlock,
 // buildAutoRecallBlocks, buildCurrentSessionContextPrompt, buildSessionFlushSummary,
 // appendSessionFlushToDailyMemory, runSessionSearch, listSessionRecords
 // moved to workspace-manager.js - imported above with Mod suffix
@@ -1312,8 +1180,8 @@ function serializeCanvasContentForPersistence(content = {}) {
   };
 }
 
-function persistAcpSession() {
-  writeJsonFile(getAcpSessionPath(), acpSession);
+function persistAgentSession() {
+  writeJsonFile(getAgentSessionPath(), agentSession);
 }
 
 function persistBootstrapState() {
@@ -1355,7 +1223,7 @@ function persistChatSession() {
     createdAt: chatSession.createdAt,
     lastUsedAt: chatSession.lastUsedAt,
     compactionCount: Number(chatSession.compactionCount || 0),
-    acpSessionId: acpSession.id || '',
+    agentSessionId: agentSession.id || '',
     messageCount: chatHistory.length,
     summary: buildConversationSummary(chatHistory),
     messages: chatHistory,
@@ -1402,7 +1270,7 @@ function startFreshSession(reason = 'manual-reset') {
     ].join('\n');
     writeTextFile(dailyPath, `${readTextFile(dailyPath, '').trim()}${header}${block}\n`, WORKSPACE_FILE_MAX_CHARS);
   }
-  resetAcpSession();
+  resetAgentSession();
   writeJsonFile(getChatHistoryPath(), []);
   chatHistory = [];
   chatSession = { id: '', createdAt: '', lastUsedAt: '', compactionCount: 0 };
@@ -1410,45 +1278,56 @@ function startFreshSession(reason = 'manual-reset') {
   return { chatHistory: [], chatSession };
 }
 
-function resetAcpSession(sessionId = '') {
-  if (sessionId && acpSession.id && acpSession.id !== sessionId) return;
-  Object.assign(acpSession, createEmptyAcpSession());
-  writeJsonFile(getAcpSessionPath(), acpSession);
+function resetAgentSession(sessionId = '') {
+  if (sessionId && agentSession.id && agentSession.id !== sessionId) return;
+  Object.assign(agentSession, createEmptyAgentSession());
+  writeJsonFile(getAgentSessionPath(), agentSession);
 }
 
-function prepareAcpSessionTurn() {
+function prepareAgentSessionTurn() {
   const now = new Date().toISOString();
-  const isNew = !acpSession.id;
-  acpSession.id = acpSession.id || require('crypto').randomUUID();
-  acpSession.createdAt = acpSession.createdAt || now;
-  acpSession.lastUsedAt = now;
-  writeJsonFile(getAcpSessionPath(), acpSession);
-  return { id: acpSession.id, isNew };
+  const isNew = !agentSession.id;
+  agentSession.id = agentSession.id || require('crypto').randomUUID();
+  agentSession.createdAt = agentSession.createdAt || now;
+  agentSession.lastUsedAt = now;
+  writeJsonFile(getAgentSessionPath(), agentSession);
+  return { id: agentSession.id, isNew };
 }
 
-function markAcpSessionTurnCompleted(sessionId) {
-  if (!sessionId || acpSession.id !== sessionId) return;
-  acpSession.turnCount = Math.max(0, Number(acpSession.turnCount || 0)) + 1;
-  acpSession.lastUsedAt = new Date().toISOString();
-  writeJsonFile(getAcpSessionPath(), acpSession);
-}
-
-function syncAcpSessionToQwen(sessionId, isNew) {
-  if (!sessionId) return;
-  const now = new Date().toISOString();
-  acpSession.id = sessionId;
-  acpSession.createdAt = (isNew || !acpSession.createdAt) ? now : acpSession.createdAt;
-  acpSession.lastUsedAt = now;
-  writeJsonFile(getAcpSessionPath(), acpSession);
+function markAgentSessionTurnCompleted(sessionId) {
+  if (!sessionId || agentSession.id !== sessionId) return;
+  agentSession.turnCount = Math.max(0, Number(agentSession.turnCount || 0)) + 1;
+  agentSession.lastUsedAt = new Date().toISOString();
+  writeJsonFile(getAgentSessionPath(), agentSession);
 }
 
 function completeWorkspaceBootstrap() {
-  const bootstrapPath = getWorkspaceFilePath('BOOTSTRAP.md');
-  if (fs.existsSync(bootstrapPath)) fs.rmSync(bootstrapPath, { force: true });
+  const completedAt = new Date().toISOString().slice(0, 10);
+  // Write a completion-record BOOTSTRAP.md so future sessions know setup is done
+  // and don't repeat the wizard. The runtime injects it into the system prompt.
+  try {
+    const answers = bootstrapState.answers || {};
+    const answerLines = Object.entries(answers)
+      .map(([k, v]) => `- **${k}**: ${String(v).trim()}`)
+      .join('\n');
+    const content = [
+      `# Bootstrap completato — ${completedAt}`,
+      '',
+      'Il setup iniziale è stato completato. Non riproporre il wizard.',
+      '',
+      '## Impostazioni raccolte',
+      answerLines || '(nessuna risposta registrata)',
+      '',
+      `Data: ${new Date().toISOString()}`,
+    ].join('\n');
+    fs.writeFileSync(getWorkspaceFilePath('BOOTSTRAP.md'), content, 'utf8');
+  } catch (err) {
+    console.error('[bootstrap] Failed to write BOOTSTRAP.md:', err.message);
+  }
   bootstrapState.active = false;
   bootstrapState.currentPrompt = '';
   writeJsonFile(getBootstrapStatePath(), bootstrapState);
-  return { ok: true, message: 'Bootstrap completato. BOOTSTRAP.md rimosso dal workspace.' };
+  return { ok: true, message: 'Bootstrap completato.' };
 }
 
 function buildWorkspaceSavedMessage(result = {}) {
@@ -1491,6 +1370,19 @@ function runLocalChatCommand(text) {
     const currentQuestion = bootstrapState.active ? String(bootstrapState.currentPrompt || '').trim() : '';
     return { message: createSystemMessage([`Bootstrap attivo: ${bootstrapState.active ? 'si' : 'no'}`, `Bootstrap pendente: ${workspaceState.bootstrapPending ? 'si' : 'no'}`, `Round: ${Number(bootstrapState.stepIndex || 0)}`, currentQuestion ? `Domanda corrente: ${currentQuestion}` : 'Domanda corrente: nessuna'].join('\n')), replaceHistory: false };
   }
+  if (input === '/bootstrap') {
+    const workspacePath = getWorkspacePath();
+    const removed = [];
+    fs.mkdirSync(workspacePath, { recursive: true });
+    for (const entry of fs.readdirSync(workspacePath, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      fs.unlinkSync(path.join(workspacePath, entry.name));
+      removed.push(entry.name);
+    }
+    writeTextFile(getWorkspaceFilePath('BOOTSTRAP.md'), '# BOOTSTRAP\n\nRiavvio del setup iniziale.', WORKSPACE_FILE_MAX_CHARS);
+    const suffix = removed.length ? ` File workspace azzerati: ${removed.join(', ')}.` : '';
+    return { message: createSystemMessage(`Bootstrap avviato da zero.${suffix} La prossima risposta avvierà il wizard.`), replaceHistory: false };
+  }
   if (input === '/workspace open') {
     shell.openPath(getWorkspacePath());
     return { message: createSystemMessage('Workspace aperto.'), replaceHistory: false };
@@ -1523,7 +1415,7 @@ function runLocalChatCommand(text) {
     return { message: createSystemMessage(result.ok ? `${result.path}:${result.startLine}-${result.endLine}\n${result.text || '[vuoto]'}` : result.error), replaceHistory: false };
   }
   if (input === '/session status') {
-    return { message: createSystemMessage([`Sessione: ${chatSession.id || 'assente'}`, `Creata: ${chatSession.createdAt || '-'}`, `Ultimo uso: ${chatSession.lastUsedAt || '-'}`, `Messaggi: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`, `ACP session: ${acpSession.id || 'assente'}`].join('\n')), replaceHistory: false };
+    return { message: createSystemMessage([`Sessione: ${chatSession.id || 'assente'}`, `Creata: ${chatSession.createdAt || '-'}`, `Ultimo uso: ${chatSession.lastUsedAt || '-'}`, `Messaggi: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`, `Agent session: ${agentSession.id || 'assente'}`].join('\n')), replaceHistory: false };
   }
   if (input.startsWith('/session search ')) {
     const query = rawInput.slice('/session search '.length).trim();
@@ -1544,7 +1436,7 @@ function runLocalChatCommand(text) {
 
 
 // Bootstrap helpers (isBootstrapAnswerEmpty, getBootstrapMissingFieldIds,
-// getBootstrapInitialPrompt, buildBootstrapAnswersPrompt, updateBootstrapStateFromAcp)
+// getBootstrapInitialPrompt, buildBootstrapAnswersPrompt, updateBootstrapStateFromAgent)
 // imported from workspace-manager — use C.BOOTSTRAP_FIELDS for field definitions.
 
 function buildWorkspaceUpdateBlock(directive = {}) {
@@ -1663,8 +1555,6 @@ function getAppStatePayload() {
     status: String(currentStatus || 'idle'),
     mode: String(brainMode || 'booting'),
     streamStatus: String(streamStatus || 'disconnected'),
-    qwenPath: String(QWEN_PS1_PATH || ''),
-    qwenCliPath: String(QWEN_CLI_JS_PATH || ''),
     ttsProvider: String(getTtsProviderDisplayName() || ''),
     ttsStatus: String(ttsStatus || 'idle'),
     ttsLatencyMs: Number(ttsLatencyMs) || null,
@@ -1921,6 +1811,12 @@ async function runDreamCycle(personalityPath, options = {}) {
     saveDreamNote(dreamPath, note);
     cleanupOldDreams(dreamPath);
 
+    // Memory maintenance: promote to MEMORY.md and update DREAMS.md
+    const maintenance = runMemoryMaintenance(app);
+    if (maintenance.ok) {
+      console.log('Memory maintenance completed:', maintenance.summary);
+    }
+
     // Fix A: scrivi anche nella daily memory del workspace → l'agente la vede automaticamente
     if (analysis.preferences.length || analysis.topics.length || conversationSummary) {
       const now = new Date();
@@ -1983,12 +1879,16 @@ function resetBrowserAgentState(patch = {}) {
   broadcastStatus();
 }
 
+// Stream emitter registry for cleanup
+const _activeEmitters = new Map();
+
 function createStreamEmitter(requestId) {
-  return {
+  const emitter = {
     lastBurstTime: Date.now(),
     emaIntervalMs: 40,
     pendingText: '',
     flushTimer: null,
+    requestId,
     queue(text) {
       const delta = String(text || '');
       if (!delta) return;
@@ -2014,7 +1914,7 @@ function createStreamEmitter(requestId) {
       setStreamStatus(STREAM_STATUS.STREAMING);
       emitChatStream({
         type: 'message',
-        requestId,
+        requestId: this.requestId,
         text: this.pendingText,
       });
       this.pendingText = '';
@@ -2025,8 +1925,21 @@ function createStreamEmitter(requestId) {
         this.flushTimer = null;
       }
       this.flush();
+      _activeEmitters.delete(this.requestId);
     },
   };
+
+  _activeEmitters.set(requestId, emitter);
+  return emitter;
+}
+
+function cleanupAllEmitters() {
+  for (const emitter of _activeEmitters.values()) {
+    if (emitter.flushTimer) {
+      clearTimeout(emitter.flushTimer);
+    }
+  }
+  _activeEmitters.clear();
 }
 
 function broadcastStatus() {
@@ -2123,7 +2036,7 @@ function extractStablePreferences(messages) {
   for (const message of messages.filter((item) => !isBootstrapHistoryMessage(item))) {
     if (message.role !== 'user') continue;
     const text = normalizeLine(message.text, 180);
-    if (!text || !/\b(voglio|usa|usare|deve|non|separa|centr|chat|avatar|nyxavatar|animazioni|gesture|finestr|trasparente|acp|tts|lipsync)\b/i.test(text)) continue;
+    if (!text || !/\b(voglio|usa|usare|deve|non|separa|centr|chat|avatar|nyxavatar|animazioni|gesture|finestr|trasparente|Agent|tts|lipsync)\b/i.test(text)) continue;
     collected.push(text);
   }
   return Array.from(new Set(collected)).slice(-12);
@@ -2152,10 +2065,46 @@ function isBootstrapHistoryMessage(message) {
   return Boolean(message?.meta?.bootstrap);
 }
 
+function resetGeneratedStateForVersionUpgrade() {
+  const packageVersion = String(app.getVersion?.() || require('../package.json').version || '').trim();
+  const versionPath = getAppVersionStatePath();
+  const previous = readJsonFile(versionPath, {});
+
+  if (previous.version === packageVersion) return false;
+
+  const userDataRoot = app.getPath('userData');
+  const resetTargets = [
+    getChatHistoryPath(),
+    getAgentSessionPath(),
+    getChatSessionPath(),
+    getBootstrapStatePath(),
+    getCanvasStatePath(),
+    getNyxMemoryPath(),
+    getBrainStatePath(),
+    getWindowStatePath(),
+    getWorkspacePath(),
+    getLegacySessionsDirPath(),
+  ];
+
+  for (const target of resetTargets) {
+    const resolved = path.resolve(target);
+    if (resolved === path.resolve(userDataRoot) || !resolved.startsWith(path.resolve(userDataRoot) + path.sep)) continue;
+    fs.rmSync(resolved, { recursive: true, force: true });
+  }
+
+  writeJsonFile(versionPath, {
+    version: packageVersion,
+    resetAt: new Date().toISOString(),
+    previousVersion: previous.version || '',
+  });
+  return true;
+}
+
 function loadPersistentData() {
   ensureUserDataDir();
+  resetGeneratedStateForVersionUpgrade();
   chatHistory = readJsonFile(getChatHistoryPath(), []);
-  acpSession = readJsonFile(getAcpSessionPath(), createEmptyAcpSession());
+  agentSession = readJsonFile(getAgentSessionPath(), createEmptyAgentSession());
   chatSession = readJsonFile(getChatSessionPath(), createEmptyChatSession());
   bootstrapState = readJsonFile(getBootstrapStatePath(), createDefaultBootstrapState());
   canvasState = readJsonFile(getCanvasStatePath(), createDefaultCanvasState());
@@ -4005,13 +3954,6 @@ function parseStructuredField(output, key) {
   return match ? match[1].trim() : '';
 }
 
-
-
-function isMissingSavedQwenSessionError(text = '') {
-  const source = String(text || '');
-  return /No saved session found with ID/i.test(source);
-}
-
 function parseLooseJsonObject(source) {
   const text = String(source || '').trim();
   if (!text) return null;
@@ -4665,6 +4607,7 @@ async function playResponseSequence(requestId, response) {
         continue;
       }
       currentAct = playback.buildActState(item, response.fallbackText || response.speech);
+      logAvatarCommand({ cmd: 'expression', expression: currentAct.expression }, requestId);
       sendAvatarCommand({ cmd: 'expression', expression: currentAct.expression });
 
       if (currentAct.sequentialMoods && currentAct.sequentialMoods.length) {
@@ -4745,6 +4688,7 @@ async function playResponseSequence(requestId, response) {
     const playbackWait = waitForAvatarPlayback(requestId, segmentId, expectedDurationMs + 1500);
 
     playback.playAvatarMotions(plan, plan.motionDuration, sendAvatarCommand);
+    scheduleSpeechArticulation(requestId, item.text, expectedDurationMs, plan);
     setStatus('speaking');
     setStreamStatus(STREAM_STATUS.SPEAKING);
     sendAvatarCommand({
@@ -4800,6 +4744,30 @@ async function playResponseSequence(requestId, response) {
   }
 }
 
+function scheduleSpeechArticulation(requestId, text, durationMs, plan = {}) {
+  const intermediateGestures = Array.isArray(plan.intermediateGestures)
+    ? plan.intermediateGestures
+    : [];
+
+  if (!intermediateGestures.length) return;
+
+  for (const entry of intermediateGestures) {
+    const delayMs = Number.isFinite(entry.delayMs)
+      ? entry.delayMs
+      : Math.max(900, Math.floor((durationMs || 0) * (entry.delayFraction || 0.5)));
+    setTimeout(() => {
+      if (activeResponseId !== requestId) return;
+      sendAvatarCommand({
+        cmd: 'motion',
+        motion: entry.gesture,
+        motionType: 'gesture',
+        duration: 3,
+        hand: entry.hand || 'right',
+      });
+    }, delayMs);
+  }
+}
+
 function cleanupRuntime() {
   if (cleanupStarted) {
     return;
@@ -4842,7 +4810,6 @@ function cleanupRuntime() {
   stopTtsService();
   baStopPinchtabService();
   ccStopPywinautoMcpService();
-  stopQwenAcpRuntime();
   resetBrainRuntimeState();
 
   try {
@@ -4973,16 +4940,16 @@ async function finalizeParsedAssistantReply(requestId, userText, response, sessi
   const assistantMessage = buildAssistantMessageFromResponse(requestId, response, options);
 
   appendHistoryMessage(assistantMessage);
-  markAcpSessionTurnCompleted(sessionInfo.id);
+  markAgentSessionTurnCompleted(sessionInfo.id);
   if (options.consumeStartupBoot !== false) {
     consumeStartupBootPrompt();
   }
   emitChatStream({ type: 'complete', requestId, message: assistantMessage });
 
   setStatus('tts-loading');
-  setBrainMode('direct-acp-ready');
+  setBrainMode('direct-agent-ready');
   setStreamStatus(STREAM_STATUS.CONNECTED);
-  
+
   void playResponseSequence(requestId, response)
     .catch((error) => {
       activeResponseId = null;
@@ -4995,7 +4962,7 @@ async function finalizeParsedAssistantReply(requestId, userText, response, sessi
       appendHistoryMessage(systemMessage);
       emitChatStream({ type: 'error', requestId, error: systemMessage.text, message: systemMessage });
       setStatus('error');
-      setBrainMode('direct-acp-error');
+      setBrainMode('direct-agent-error');
       setStreamStatus(STREAM_STATUS.ERROR);
       setTtsState('error', { error: systemMessage.text });
     });
@@ -5006,13 +4973,8 @@ async function finalizeAssistantReply(requestId, userText, outputBuffer, session
   return finalizeParsedAssistantReply(requestId, userText, response, sessionInfo, options);
 }
 
-async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = {}) {
+async function runAgentTurn(requestId, prompt, userText, sessionConfig, options = {}) {
   const launch = await getBrainSpawnConfig(prompt, sessionConfig);
-
-  // Qwen usa ACP nativo con JSON-RPC streaming
-  if (launch.kind === 'qwen-acp') {
-    return runQwenAcpTurn(requestId, prompt, userText, sessionConfig, options);
-  }
 
   // Ollama usa API HTTP
   if (launch.kind === 'ollama-http') {
@@ -5025,8 +4987,8 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
         cancelled: false,
         buffer: '',
         preview: '',
-        acpSessionId: sessionConfig.id,
-        acpSessionNew: sessionConfig.isNew,
+        agentSessionId: sessionConfig.id,
+        agentSessionNew: sessionConfig.isNew,
         streamEmitter: createStreamEmitter(requestId),
       };
     } else {
@@ -5034,13 +4996,13 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
       activeChatRequest.abortController = controller;
       activeChatRequest.buffer = '';
       activeChatRequest.preview = '';
-      activeChatRequest.acpSessionId = sessionConfig.id;
-      activeChatRequest.acpSessionNew = sessionConfig.isNew;
+      activeChatRequest.agentSessionId = sessionConfig.id;
+      activeChatRequest.agentSessionNew = sessionConfig.isNew;
     }
 
     const timer = setTimeout(() => {
       stopActiveChatRequest('timeout');
-    }, ACP_TIMEOUT_MS);
+    }, AGENT_TIMEOUT_MS);
 
     try {
       const response = await generateOllamaResponse(launch.url, launch.model, prompt);
@@ -5057,10 +5019,86 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
       }
 
       const buffer = String(response?.response || '').trim();
+      const { modelText: normalizedBuffer } = normalizeModelOutput(buffer);
+      logModelOutput(buffer, normalizedBuffer, requestId);
+
+      const responseParsed = parseInlineResponse(normalizedBuffer, userText, { strictJson: options.strictJson === true });
+      const phasePlanParsed = parsePhasePlan(normalizedBuffer, userText, { strictJson: options.strictJson === true });
+      logParseResult({ response: responseParsed, phasePlan: phasePlanParsed }, requestId);
+
       return {
         buffer,
-        response: parseInlineResponse(buffer, userText, { strictJson: options.strictJson === true }),
-        phasePlan: parsePhasePlan(buffer, userText, { strictJson: options.strictJson === true }),
+        response: responseParsed,
+        phasePlan: phasePlanParsed,
+      };
+    } catch (error) {
+      clearTimeout(timer);
+      if (activeChatRequest?.id === requestId) {
+        activeChatRequest.proc = null;
+        activeChatRequest.abortController = null;
+      }
+      if (error?.name === 'AbortError') {
+        const cancelledError = new Error(activeChatRequest?.stopReason === 'timeout' ? 'timeout' : 'cancelled');
+        cancelledError.code = activeChatRequest?.stopReason || 'cancelled';
+        throw cancelledError;
+      }
+      throw error;
+    }
+  }
+
+  if (launch.kind === 'opencode-http') {
+    const controller = new AbortController();
+    if (!activeChatRequest || activeChatRequest.id !== requestId) {
+      activeChatRequest = {
+        id: requestId,
+        proc: null,
+        abortController: controller,
+        cancelled: false,
+        buffer: '',
+        preview: '',
+        agentSessionId: sessionConfig.id,
+        agentSessionNew: sessionConfig.isNew,
+        streamEmitter: createStreamEmitter(requestId),
+      };
+    } else {
+      activeChatRequest.proc = null;
+      activeChatRequest.abortController = controller;
+      activeChatRequest.buffer = '';
+      activeChatRequest.preview = '';
+      activeChatRequest.agentSessionId = sessionConfig.id;
+      activeChatRequest.agentSessionNew = sessionConfig.isNew;
+    }
+
+    const timer = setTimeout(() => {
+      stopActiveChatRequest('timeout');
+    }, AGENT_TIMEOUT_MS);
+
+    try {
+      const payload = await createOpenCodeChatCompletion({
+        baseUrl: launch.url,
+        apiKey: launch.apiKey,
+        model: launch.model,
+        messages: [{ role: 'user', content: prompt }],
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (activeChatRequest?.id === requestId) {
+        activeChatRequest.proc = null;
+        activeChatRequest.abortController = null;
+      }
+
+      if (isRequestCancelled(requestId)) {
+        const cancelledError = new Error(activeChatRequest?.stopReason === 'timeout' ? 'timeout' : 'cancelled');
+        cancelledError.code = activeChatRequest?.stopReason || 'cancelled';
+        throw cancelledError;
+      }
+
+      const buffer = extractOpenCodeText(payload).trim();
+      const { modelText: normalizedBuffer } = normalizeModelOutput(buffer);
+      return {
+        buffer,
+        response: parseInlineResponse(normalizedBuffer, userText, { strictJson: options.strictJson === true }),
+        phasePlan: parsePhasePlan(normalizedBuffer, userText, { strictJson: options.strictJson === true }),
       };
     } catch (error) {
       clearTimeout(timer);
@@ -5093,16 +5131,16 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
         cancelled: false,
         buffer: '',
         preview: '',
-        acpSessionId: sessionConfig.id,
-        acpSessionNew: sessionConfig.isNew,
+        agentSessionId: sessionConfig.id,
+        agentSessionNew: sessionConfig.isNew,
         streamEmitter: createStreamEmitter(requestId),
       };
     } else {
       activeChatRequest.proc = proc;
       activeChatRequest.buffer = '';
       activeChatRequest.preview = '';
-      activeChatRequest.acpSessionId = sessionConfig.id;
-      activeChatRequest.acpSessionNew = sessionConfig.isNew;
+      activeChatRequest.agentSessionId = sessionConfig.id;
+      activeChatRequest.agentSessionNew = sessionConfig.isNew;
     }
 
     let stdoutBuffer = '';
@@ -5110,7 +5148,7 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
     let preview = '';
     const timer = setTimeout(() => {
       stopActiveChatRequest('timeout');
-    }, ACP_TIMEOUT_MS);
+    }, AGENT_TIMEOUT_MS);
 
     proc.stdout.on('data', (chunk) => {
       stdoutBuffer += String(chunk);
@@ -5169,33 +5207,20 @@ async function runAcpTurn(requestId, prompt, userText, sessionConfig, options = 
         return;
       }
 
-      const failureText = sanitizeCliOutput(stderrBuffer || stdoutBuffer, launch.brainId) || `ACP exited with code ${code}`;
+      const failureText = sanitizeCliOutput(stderrBuffer || stdoutBuffer, launch.brainId) || `Brain process exited with code ${code}`;
       if (code !== 0) {
-        if (launch.brainId === 'qwen' && !options.qwenSessionResetAttempted && isMissingSavedQwenSessionError(failureText)) {
-          resetAcpSession(sessionConfig.id);
-          resolve(runAcpTurn(
-            requestId,
-            prompt,
-            userText,
-            prepareAcpSessionTurn(),
-            {
-              ...options,
-              qwenSessionResetAttempted: true,
-            },
-          ));
-          return;
-        }
         reject(new Error(normalizeLine(failureText, 400)));
         return;
       }
 
       markBrainSessionActive(launch.brainId);
       const cleanedStdout = sanitizeCliOutput(stdoutBuffer, launch.brainId) || sanitizeCliOutput(stderrBuffer, launch.brainId);
+      const { modelText: normalizedStdout } = normalizeModelOutput(cleanedStdout);
 
       resolve({
         buffer: cleanedStdout,
-        response: parseInlineResponse(cleanedStdout, userText, { strictJson: options.strictJson === true }),
-        phasePlan: parsePhasePlan(cleanedStdout, userText, { strictJson: options.strictJson === true }),
+        response: parseInlineResponse(normalizedStdout, userText, { strictJson: options.strictJson === true }),
+        phasePlan: parsePhasePlan(normalizedStdout, userText, { strictJson: options.strictJson === true }),
       });
     });
   });
@@ -5241,7 +5266,7 @@ function stopActiveChatRequest(reason = 'stopped') {
     clearSpeechResetTimer();
     sendAvatarCommand({ cmd: 'stop' });
     setStatus('idle');
-    setBrainMode('direct-acp-ready');
+    setBrainMode('direct-agent-ready');
     setStreamStatus(STREAM_STATUS.CONNECTED);
     setTtsState('idle', { error: null });
     emitChatStream({
@@ -5262,8 +5287,39 @@ function stopActiveChatRequest(reason = 'stopped') {
 
 const MAX_AGENT_TURNS = 15;
 
-const DATA_TOOL_TYPES = new Set(['read_file', 'write_file', 'edit_file', 'apply_patch', 'shell', 'glob', 'grep', 'multi_file_read', 'git', 'web_fetch', 'web_search', 'task', 'memory_search']);
+const DATA_TOOL_TYPES = new Set(['read_file', 'write_file', 'edit_file', 'apply_patch', 'shell', 'glob', 'grep', 'multi_file_read', 'git', 'web_fetch', 'web_search', 'task', 'memory_search', 'memory_get']);
 const ACTION_TOOL_TYPES = new Set(['avatar', 'delay', 'browser', 'computer', 'canvas', 'workspace']);
+
+function extractToolCalls(sequence = []) {
+  return (Array.isArray(sequence) ? sequence : [])
+    .filter((item) => item && DATA_TOOL_TYPES.has(item.type));
+}
+
+function extractActionCalls(sequence = []) {
+  return (Array.isArray(sequence) ? sequence : [])
+    .filter((item) => item && ACTION_TOOL_TYPES.has(item.type));
+}
+
+function partitionAvailableToolCalls(calls = []) {
+  const available = [];
+  const blocked = [];
+
+  for (const call of Array.isArray(calls) ? calls : []) {
+    const status = getToolAvailability(call.type, call.directive || call);
+    if (status.available) {
+      available.push(call);
+    } else {
+      blocked.push({
+        type: call.type,
+        ok: false,
+        error: status.reason || `Tool non disponibile: ${call.type}`,
+        directive: call.directive || null,
+      });
+    }
+  }
+
+  return { available, blocked };
+}
 
 function hasToolCalls(sequence) {
   return sequence.some((item) => item.type && (DATA_TOOL_TYPES.has(item.type) || ACTION_TOOL_TYPES.has(item.type)));
@@ -5271,171 +5327,33 @@ function hasToolCalls(sequence) {
 
 
 
-const READ_ONLY_TOOL_TYPES = new Set(['read_file', 'glob', 'grep', 'web_fetch', 'web_search', 'memory_search']);
+const READ_ONLY_TOOL_TYPES = new Set(['read_file', 'glob', 'grep', 'web_fetch', 'web_search', 'memory_search', 'memory_get']);
 
-/**
- * Execute a single tool call. Handles all tool types with consistent sanitization.
- *
- * @param {Object} call - Tool call object with { type, directive }
- * @returns {Promise<Object>} Sanitized tool result
- */
-async function executeToolCall(call) {
-  if (!call || !call.type || !call.directive) {
-    return { type: call?.type || 'unknown', ok: false, error: 'Tool call missing type or directive' };
-  }
-  try {
-    switch (call.type) {
-      // ── Read-only tools (safe to run in parallel) ──
-      case 'read_file': {
-        const fp = String(call.directive.path || '');
-        if (!fp) return { type: 'read_file', ok: false, error: 'No path specified' };
-        let r = readFileTool(fp, { startLine: call.directive.startLine, endLine: call.directive.endLine });
-        // Fallback: se il file non è nel sandbox, prova come path relativo al workspace
-        if (!r.ok) {
-          const wsResolved = path.resolve(getWorkspacePath(), fp);
-          if (wsResolved.startsWith(getWorkspacePath()) && fs.existsSync(wsResolved)) {
-            try {
-              const raw = fs.readFileSync(wsResolved, 'utf-8');
-              const lines = raw.split(/\r?\n/);
-              const start = Math.max(0, (call.directive.startLine || 1) - 1);
-              const end = call.directive.endLine ? Math.min(call.directive.endLine, lines.length) : Math.min(start + 2000, lines.length);
-              r = { ok: true, content: lines.slice(start, end).join('\n') };
-            } catch (wsErr) { /* tieni errore originale */ }
-          }
-        }
-        return { type: 'read_file', ok: r.ok, content: r.ok ? sanitizeFileOutput(r.content) : sanitizeGenericOutput(r.error), path: fp, error: r.ok ? null : r.error };
-      }
-      case 'glob': {
-        const p = String(call.directive.pattern || '');
-        if (!p) return { type: 'glob', ok: false, error: 'No pattern specified' };
-        const r = globFiles(p, call.directive.path || '.');
-        return { type: 'glob', ok: r.ok, files: r.ok ? r.files.map((f) => f.relativePath || f.path) : [], error: r.ok ? null : r.error };
-      }
-      case 'grep': {
-        const p = String(call.directive.pattern || '');
-        if (!p) return { type: 'grep', ok: false, error: 'No pattern specified' };
-        const r = grepFiles(p, call.directive.path || '.', { include: call.directive.include, maxResults: 50 });
-        return { type: 'grep', ok: r.ok, matches: r.ok ? r.results.map((m) => `${m.relativePath}:${m.line}: ${sanitizeGenericOutput(m.text)}`) : [], error: r.ok ? null : r.error };
-      }
-      case 'web_fetch': {
-        const url = String(call.directive.url || '');
-        if (!url) return { type: 'web_fetch', ok: false, error: 'No URL specified' };
-        const r = await webFetch(url, { format: call.directive.format || 'markdown' });
-        return { type: 'web_fetch', ok: r.ok, content: r.ok ? sanitizeWebOutput(r.content) : sanitizeGenericOutput(r.error), url, error: r.ok ? null : r.error };
-      }
-      case 'web_search': {
-        const q = String(call.directive.query || '');
-        if (!q) return { type: 'web_search', ok: false, error: 'No query specified' };
-        const r = await webSearch(q, { numResults: call.directive.numResults || 5 });
-        return { type: 'web_search', ok: r.ok, results: r.ok ? sanitizeGenericOutput(r.results.map((s) => `${s.title} - ${s.url}`).join('\n')) : sanitizeGenericOutput(r.error), query: q, error: r.ok ? null : r.error };
-      }
-      case 'memory_search': {
-        const query = String(call.directive.query || '');
-        if (!query) return { type: 'memory_search', ok: false, error: 'No query specified' };
-        // Escape regex special chars to prevent regex injection
-        const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const queryRegex = new RegExp(escapedQuery, 'i');
-        const scope = String(call.directive.scope || 'all');
-        const memoryResults = [];
-        const memoryPath = getWorkspaceFilePath('MEMORY.md');
-        if ((scope === 'all' || scope === 'memory') && fs.existsSync(memoryPath)) {
-          const content = fs.readFileSync(memoryPath, 'utf-8');
-          if (queryRegex.test(content)) {
-            const lines = content.split('\n').filter((l) => queryRegex.test(l));
-            memoryResults.push({ file: 'MEMORY.md', matches: sanitizeGenericOutput(lines.slice(0, 10).join('\n')) });
-          }
-        }
-        if (scope === 'all' || scope === 'daily') {
-          const dailyNotes = listRecentDailyMemoryNotes(10);
-          for (const note of dailyNotes) {
-            if (fs.existsSync(note.fullPath)) {
-              const content = fs.readFileSync(note.fullPath, 'utf-8');
-              if (queryRegex.test(content)) {
-                const lines = content.split('\n').filter((l) => queryRegex.test(l));
-                memoryResults.push({ file: note.relativePath, matches: sanitizeGenericOutput(lines.slice(0, 5).join('\n')) });
-              }
-            }
-          }
-        }
-        return { type: 'memory_search', ok: true, query, results: memoryResults, count: memoryResults.length };
-      }
+async function executeToolCalls(toolCalls = []) {
+  const calls = Array.isArray(toolCalls) ? toolCalls.filter(Boolean) : [];
+  if (!calls.length) return [];
 
-      // ── Sequential / write tools ──
-      case 'shell': {
-        const cmd = String(call.directive.command || '');
-        if (!cmd) return { type: 'shell', ok: false, error: 'No command specified' };
-        const r = await runShellCommand(cmd, { cwd: call.directive.cwd, timeout: call.directive.timeout || 30000 });
-        return { type: 'shell', ok: r.ok, output: r.ok ? sanitizeShellOutput(r.stdout) : sanitizeGenericOutput(`${r.error}\n${r.stderr || ''}`), command: r.command, error: r.ok ? null : (r.error || r.stderr || 'shell error') };
-      }
-      case 'write_file': {
-        const fp = String(call.directive.path || '');
-        if (!fp) return { type: 'write_file', ok: false, error: 'No path specified' };
-        const r = writeFileTool(fp, String(call.directive.content || ''), { overwrite: Boolean(call.directive.overwrite) });
-        return { type: 'write_file', ok: r.ok, path: r.ok ? r.path : fp, error: r.ok ? null : r.error };
-      }
-      case 'edit_file': {
-        const fp = String(call.directive.path || '');
-        if (!fp) return { type: 'edit_file', ok: false, error: 'No path specified' };
-        const r = editFileTool(fp, { oldString: String(call.directive.oldString || ''), newString: String(call.directive.newString || ''), replaceAll: Boolean(call.directive.replaceAll), regex: Boolean(call.directive.regex) });
-        return { type: 'edit_file', ok: r.ok, path: r.ok ? r.path : fp, replacements: r.ok ? r.replacements : 0, error: r.ok ? null : r.error };
-      }
-      case 'apply_patch': {
-        const fp = String(call.directive.path || '');
-        if (!fp) return { type: 'apply_patch', ok: false, error: 'No path specified' };
-        const r = applyPatchText(fp, String(call.directive.oldText || ''), String(call.directive.newText || ''), Boolean(call.directive.replaceAll));
-        return { type: 'apply_patch', ok: r.ok, path: r.ok ? r.path : fp, replacements: r.ok ? r.replacements : 0, error: r.ok ? null : r.error };
-      }
-      case 'multi_file_read': {
-        const files = Array.isArray(call.directive.files) ? call.directive.files : [];
-        if (!files.length) return { type: 'multi_file_read', ok: false, error: 'No files specified' };
-        const r = readManyFiles(files);
-        const mappedFiles = r.ok ? r.files.map((f) => {
-          if (f.ok) return { path: f.path, ok: true, content: sanitizeFileOutput(f.content) };
-          // Workspace fallback: try resolving against workspace path for files outside FILE_TOOL_ROOT
-          const wsResolved = path.resolve(getWorkspacePath(), path.basename(f.path || ''));
-          if (wsResolved.startsWith(getWorkspacePath()) && fs.existsSync(wsResolved)) {
-            try {
-              const raw = fs.readFileSync(wsResolved, 'utf-8');
-              return { path: wsResolved, ok: true, content: sanitizeFileOutput(raw.split(/\r?\n/).slice(0, 2000).join('\n')) };
-            } catch (_) { /* fall through to error */ }
-          }
-          return { path: f.path, ok: false, content: f.error };
-        }) : [];
-        return { type: 'multi_file_read', ok: r.ok, files: mappedFiles, error: r.ok ? null : r.error };
-      }
-      case 'git': {
-        const r = await gitHandleAction(String(call.directive.action || 'status'), call.directive.params || {}, String(call.directive.cwd || '.'));
-        return { type: 'git', ok: r.ok, output: r.ok ? sanitizeGenericOutput(r.stdout || JSON.stringify(r)) : sanitizeGenericOutput(r.error), action: call.directive.action, error: r.ok ? null : r.error };
-      }
-      case 'task': {
-        const r = handleTaskAction(taskState, String(call.directive.action || 'list'), call.directive.params || {});
-        const rawOutput = r.ok ? JSON.stringify(r.task || r.tasks || r.summary || r) : r.error;
-        return { type: 'task', ok: r.ok, output: sanitizeGenericOutput(rawOutput), error: r.ok ? null : r.error };
-      }
-      default:
-        return { type: call.type, ok: false, error: `Tool sconosciuto: ${call.type}` };
+  const results = new Array(calls.length);
+  const readOnlyJobs = [];
+
+  for (let index = 0; index < calls.length; index += 1) {
+    const call = calls[index];
+    if (READ_ONLY_TOOL_TYPES.has(call.type)) {
+      readOnlyJobs.push({ index, call });
     }
-  } catch (error) {
-    return { type: call.type, ok: false, error: error.message };
   }
+
+  await Promise.all(readOnlyJobs.map(async ({ index, call }) => {
+    results[index] = await toolExecutor.execute(call);
+  }));
+
+  for (let index = 0; index < calls.length; index += 1) {
+    if (results[index]) continue;
+    results[index] = await toolExecutor.execute(calls[index]);
+  }
+
+return results;
 }
-
-/**
- * Execute a batch of tool calls — parallel for read-only, sequential for write tools.
- *
- * @param {Array<{type: string, directive: Object}>} toolCalls - Tool calls to execute
- * @returns {Promise<Object[]>} Array of sanitized tool results
- */
-
-
-
-
-
-
-
-
-
-
 
 function reportDetachedAsyncError(context, error, requestId = null) {
   const detail = normalizeLine(error?.message || String(error || context), 400);
@@ -5451,7 +5369,7 @@ function reportDetachedAsyncError(context, error, requestId = null) {
     appendHistoryMessage(systemMessage);
     emitChatStream({ type: 'error', requestId, error: systemMessage.text, message: systemMessage });
     setStatus('error');
-    setBrainMode('direct-acp-error');
+    setBrainMode('direct-agent-error');
     setStreamStatus(STREAM_STATUS.ERROR);
     setTtsState('error', { error: systemMessage.text });
   }
@@ -5553,6 +5471,43 @@ app.whenReady().then(() => {
     }
   }
 
+  function saveUserSettings(data) {
+    const content = [
+      '# USER',
+      '',
+      `Name: ${data.name || ''}`,
+      `Preferred Name: ${data.preferredName || ''}`,
+      `Timezone: ${data.timezone || ''}`,
+      `Privacy Preferences: ${data.privacy || ''}`,
+    ].filter(Boolean).join('\n');
+    writeTextFile(getWorkspaceFilePath('USER.md'), content, WORKSPACE_FILE_MAX_CHARS);
+    return { ok: true };
+  }
+
+  function saveSoulSettings(data) {
+    const content = [
+      '# SOUL',
+      '',
+      `Avatar Name: ${data.avatarName || 'Nyx'}`,
+      `Tone Style: ${data.toneStyle || 'pragmatic'}`,
+      `Voice Style: ${data.voiceStyle || 'neutral'}`,
+      `Boundaries: ${data.boundaries || ''}`,
+    ].filter(Boolean).join('\n');
+    writeTextFile(getWorkspaceFilePath('SOUL.md'), content, WORKSPACE_FILE_MAX_CHARS);
+    return { ok: true };
+  }
+
+  function saveIdentitySettings(data) {
+    const content = [
+      '# IDENTITY',
+      '',
+      `Role: ${data.role || ''}`,
+      `Focus Context: ${data.focusContext || ''}`,
+    ].filter(Boolean).join('\n');
+    writeTextFile(getWorkspaceFilePath('IDENTITY.md'), content, WORKSPACE_FILE_MAX_CHARS);
+    return { ok: true };
+  }
+
   // Schedule dream mode
   scheduleDream(dreamState, async () => {
     await runDreamCycle(personalityPath);
@@ -5595,6 +5550,8 @@ app.whenReady().then(() => {
     getCircuitBreakerStatus: () => getCircuitBreakerStatus(circuitBreakerState),
     resetCircuitBreaker: () => resetCircuitBreaker(circuitBreakerState),
     getDreamStatus: () => getDreamStatus(dreamState),
+    getDebugLogs: () => require('./debug-logger').getRecentDebugLogs(),
+    clearDebugLogs: () => require('./debug-logger').clearDebugLogs(),
     getPersonalityState: () => personalityState,
     getPersonalityPrompt: () => getPersonalityPrompt(personalityState),
     getPromptStats: () => getPromptStats(promptCacheState),
@@ -5605,6 +5562,9 @@ app.whenReady().then(() => {
       clipboard.writeText(String(text || ''));
       return { ok: true };
     },
+    'settings:save-user': (data) => saveUserSettings(data),
+    'settings:save-soul': (data) => saveSoulSettings(data),
+    'settings:save-identity': (data) => saveIdentitySettings(data),
     // Avatar typed command infrastructure
     getAvatarWindow: wmGetAvatarWindow,
     handleAvatarPlaybackInternal: (_resolvePlaybackWaiter, _makePlaybackKey, _activeResponseId, payload) => {
@@ -5693,6 +5653,28 @@ app.whenReady().then(() => {
       emitHook(HOOK_EVENTS.FRUSTRATION, { text: trimmed, score: frustrationResult.score });
     }
 
+    // Pre-compaction flush: when context is 75-90% full, ask the model to write
+    // important facts to today's daily note before messages start getting dropped.
+    // Runs as a background fire-and-forget — user never sees it (NO_REPLY).
+    if (!isBootstrapTurn && needsPreFlush(chatHistory)) {
+      const today = new Date().toISOString().slice(0, 10);
+      const flushPrompt = [
+        'SISTEMA — FLUSH PRE-COMPACTION (NO_REPLY)',
+        '',
+        `Il contesto è quasi pieno. Scrivi subito le informazioni importanti di questa sessione`,
+        `nella nota giornaliera memory/${today}.md usando il tool memory_write.`,
+        'Includi: fatti nuovi sull\'utente, decisioni prese, argomenti rilevanti.',
+        'Se non c\'è nulla di importante da salvare, rispondi esattamente: NO_REPLY',
+        'Non mostrare questo messaggio all\'utente.',
+      ].join('\n');
+      // Fire-and-forget: don't await, don't block the user's message
+      setImmediate(async () => {
+        try {
+          await runAgentTurn(requestId + '-flush', flushPrompt, '', {}, { streamPreview: false, silent: true });
+        } catch (_) { /* flush failure is non-fatal */ }
+      });
+    }
+
     const pruneResult = smartPrune(chatHistory, trimmed);
     if (pruneResult.action !== 'none') {
       emitHook(HOOK_EVENTS.CONTEXT_PRUNE, { chatHistory, action: pruneResult.action, pruned: pruneResult.pruned });
@@ -5730,12 +5712,12 @@ app.whenReady().then(() => {
     if (isBootstrapTurn) {
       if (!bootstrapState.active) {
         startBootstrapWizard();
-        void orchestrator.startBootstrapAcpRequest(requestId, trimmed, { mode: 'start' }).catch((error) => {
-          reportDetachedAsyncError('startBootstrapAcpRequest:start', error, requestId);
+        void orchestrator.startBootstrapAgentRequest(requestId, trimmed, { mode: 'start' }).catch((error) => {
+          reportDetachedAsyncError('startBootstrapAgentRequest:start', error, requestId);
         });
       } else {
-        void orchestrator.startBootstrapAcpRequest(requestId, trimmed, { mode: 'answer' }).catch((error) => {
-          reportDetachedAsyncError('startBootstrapAcpRequest:answer', error, requestId);
+        void orchestrator.startBootstrapAgentRequest(requestId, trimmed, { mode: 'answer' }).catch((error) => {
+          reportDetachedAsyncError('startBootstrapAgentRequest:answer', error, requestId);
         });
       }
 
@@ -5747,8 +5729,8 @@ app.whenReady().then(() => {
       };
     }
 
-    void orchestrator.startDirectAcpRequest(requestId, trimmed).catch((error) => {
-      reportDetachedAsyncError('startDirectAcpRequest', error, requestId);
+    void orchestrator.startDirectAgentRequest(requestId, trimmed).catch((error) => {
+      reportDetachedAsyncError('startDirectAgentRequest', error, requestId);
     });
 
     return {
@@ -5769,10 +5751,6 @@ app.whenReady().then(() => {
       });
     }, 5000);
   }
-  void ensureQwenAcpRuntime().catch((error) => {
-    appendQwenAcpStderr(`Startup ACP init error: ${error.message || String(error)}`);
-  });
-
   app.on('activate', () => {
     ensureWindows();
   });

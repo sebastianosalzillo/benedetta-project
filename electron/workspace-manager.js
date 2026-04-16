@@ -6,29 +6,10 @@ const {
   SESSIONS_DIRNAME,
   WORKSPACE_REQUIRED_FILES,
   WORKSPACE_MUTABLE_FILES,
+  WORKSPACE_OPTIONAL_FILES,
   WORKSPACE_FILE_MAX_CHARS,
   WORKSPACE_TOTAL_MAX_CHARS,
   WORKSPACE_DAILY_NOTE_MAX_CHARS,
-  SESSION_SEARCH_MAX_RESULTS,
-  MEMORY_SEARCH_MAX_RESULTS,
-  MAX_CHAT_HISTORY,
-  MAX_INITIAL_PROMPT_HISTORY,
-  MAX_DAILY_MEMORY_NOTES,
-  MAX_COMPACT_PRESERVE_TAIL,
-  MAX_RECENT_TURNS_FOR_SESSION,
-  MAX_RECENT_TURNS_FOR_SUMMARY,
-  MAX_STABLE_PREFERENCES,
-  MAX_RECENT_TOPICS,
-  MAX_WORD_COUNT_REQUEST,
-  MIN_WORD_COUNT_REQUEST,
-  DEFAULT_WORD_COUNT,
-  MAX_SUMMARY_LENGTH,
-  MAX_SESSION_TURN_LENGTH,
-  MAX_USER_PREFERENCE_LENGTH,
-  MAX_TOPIC_LENGTH,
-  BOOTSTRAP_FIELDS,
-  BOOTSTRAP_EMPTY_VALUES,
-  PREFERENCE_KEYWORDS,
   ENABLE_LIVE_CANVAS,
 } = require('./constants');
 
@@ -93,8 +74,14 @@ function readTextFile(filePath, fallback = '') {
  * Write text file with write-side character limit enforcement.
  * Prevents workspace files from growing indefinitely.
  */
+const _dirExistsCache = new Set();
+
 function writeTextFile(filePath, value, maxChars = null) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const dir = path.dirname(filePath);
+  if (!_dirExistsCache.has(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    _dirExistsCache.add(dir);
+  }
   let text = String(value || '');
   if (maxChars && text.length > maxChars) {
     text = truncateWithMarker(text, maxChars);
@@ -155,8 +142,8 @@ function getNyxMemoryPath(app) {
   return getAppFilePath(app, 'nyx-memory.json');
 }
 
-function getAcpSessionPath(app) {
-  return getAppFilePath(app, 'acp-session.json');
+function getAgentSessionPath(app) {
+  return getAppFilePath(app, 'agent-session.json');
 }
 
 function getChatSessionPath(app) {
@@ -226,7 +213,7 @@ function buildDefaultWorkspaceFiles() {
       'When something is ambiguous, clarify it with precision.',
     ].join('\n'),
     'TOOLS.md': [
-      '# TOOLS', '', '- Direct ACP via Qwen CLI with session resume.',
+      '# TOOLS', '', '- Direct brain runtime via OpenCode or Ollama.',
       '- Real browser via PinchTab.',
       ...(ENABLE_LIVE_CANVAS ? ['- Side canvas for text, clipboard, files, images, video, and audio.'] : ['- Real computer use for windows, controls, and desktop input.']),
       '- Local TTS for playback and lipsync.',
@@ -288,6 +275,21 @@ function ensureWorkspaceBootstrap(app) {
       }
     } catch { /* ignore best-effort migration errors */ }
   }
+}
+
+function resetWorkspaceMarkdownForBootstrap(app) {
+  const workspacePath = getWorkspacePath(app);
+  ensureDirectory(workspacePath);
+  const removed = [];
+
+  for (const entry of fs.readdirSync(workspacePath, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+    const filePath = path.join(workspacePath, entry.name);
+    fs.unlinkSync(filePath);
+    removed.push(entry.name);
+  }
+
+  return removed;
 }
 
 function readWorkspaceState(app, bootstrapState, startupBootPrompt) {
@@ -370,18 +372,25 @@ function buildWorkspaceUpdateBlock(directive = {}) {
 
 function applyWorkspaceUpdate(app, directive = {}) {
   const fileName = String(directive.file || '').trim();
-  if (!WORKSPACE_MUTABLE_FILES.includes(fileName)) {
-    return { ok: false, error: 'Workspace update not allowed for this file.' };
+  const allowedFiles = [...WORKSPACE_MUTABLE_FILES, ...WORKSPACE_REQUIRED_FILES];
+  if (!allowedFiles.includes(fileName)) {
+    return { ok: false, error: `Workspace update not allowed for: ${fileName}. Allowed: ${allowedFiles.join(', ')}` };
   }
 
   const filePath = getWorkspaceFilePath(app, fileName);
+  const mode = String(directive.mode || 'append').trim().toLowerCase();
+
+  if (mode === 'read') {
+    const content = readTextFile(filePath, '');
+    return { ok: true, file: fileName, path: filePath, mode, content, exists: content.trim().length > 0 };
+  }
+
   const content = normalizeSpeechText(String(directive.content || ''));
   if (!content) return { ok: false, error: 'Workspace update has no content.' };
 
   const current = readTextFile(filePath, '');
   if (current.includes(content)) return { ok: true, skipped: true, file: fileName, path: filePath };
 
-  const mode = String(directive.mode || 'append').trim().toLowerCase();
   let nextText = current;
 
   if (mode === 'replace') {
@@ -391,9 +400,8 @@ function applyWorkspaceUpdate(app, directive = {}) {
     nextText = `${current.trimEnd()}${prefix}${buildWorkspaceUpdateBlock(directive)}`.trimEnd() + '\n';
   }
 
-  // Enforce total file size limit
   writeTextFile(filePath, nextText, WORKSPACE_FILE_MAX_CHARS);
-  return { ok: true, file: fileName, path: filePath };
+  return { ok: true, file: fileName, path: filePath, mode };
 }
 
 function buildWorkspaceSavedMessage(result = {}) {
@@ -589,9 +597,9 @@ function resetChatSessionState(app, chatHistory, chatSession, persistChatSession
   return { chatHistory: [], chatSession };
 }
 
-function startFreshSession(app, chatHistory, chatSession, acpSession, persistChatSessionFn, resetAcpSessionFn, appendSessionFlushFn, reason = 'manual-reset') {
+function startFreshSession(app, chatHistory, chatSession, agentSession, persistChatSessionFn, resetAgentSessionFn, appendSessionFlushFn, reason = 'manual-reset') {
   appendSessionFlushFn(chatHistory.slice(0, -1), reason);
-  resetAcpSessionFn();
+  resetAgentSessionFn();
   return resetChatSessionState(app, chatHistory, chatSession, persistChatSessionFn);
 }
 
@@ -609,26 +617,26 @@ function buildSessionMarkdownRecord(record = {}) {
   const recentTurns = messages.slice(-MAX_RECENT_TURNS_FOR_SESSION).map((m) => `- ${String(m.role || 'unknown').toUpperCase()}: ${normalizeLine(m.text, MAX_SESSION_TURN_LENGTH)}`);
   return [
     '# SESSION', '', `- id: ${record.id || 'unknown'}`, `- created_at: ${record.createdAt || '-'}`,
-    `- last_used_at: ${record.lastUsedAt || '-'}`, `- acp_session_id: ${record.acpSessionId || ''}`,
+    `- last_used_at: ${record.lastUsedAt || '-'}`, `- agent_session_id: ${record.agentSessionId || ''}`,
     `- message_count: ${Number(record.messageCount || messages.length || 0)}`, `- compaction_count: ${Number(record.compactionCount || 0)}`,
     '', '## Summary', '', record.summary || 'No relevant content.', '', '## Recent Turns', '',
     ...(recentTurns.length ? recentTurns : ['- none']), '',
   ].join('\n');
 }
 
-function persistCurrentSessionRecord(app, chatSession, chatHistory, acpSession) {
+function persistCurrentSessionRecord(app, chatSession, chatHistory, agentSession) {
   const sessionsDir = getSessionsDirPath(app);
   ensureDirectory(sessionsDir);
   const record = {
     id: chatSession.id, createdAt: chatSession.createdAt, lastUsedAt: chatSession.lastUsedAt,
-    compactionCount: Number(chatSession.compactionCount || 0), acpSessionId: acpSession.id || '',
+    compactionCount: Number(chatSession.compactionCount || 0), agentSessionId: agentSession.id || '',
     messageCount: chatHistory.length, summary: buildConversationSummary(chatHistory), messages: chatHistory,
   };
   writeJsonFile(getSessionRecordPath(app, chatSession.id), record);
   writeTextFile(getSessionMarkdownPath(app, chatSession.id), buildSessionMarkdownRecord(record), WORKSPACE_FILE_MAX_CHARS);
 }
 
-function appendSessionFlushToDailyMemory(app, messages, reason = 'manual') {
+function appendSessionFlushToDailyMemory(app, chatSession, messages, reason = 'manual') {
   const relevantMessages = Array.isArray(messages) ? messages.filter((m) => m?.text) : [];
   if (!relevantMessages.length) return null;
 
@@ -649,10 +657,10 @@ function appendSessionFlushToDailyMemory(app, messages, reason = 'manual') {
 }
 
 // ============================================================
-// ACP session management
+// Agent session management
 // ============================================================
 
-function createEmptyAcpSession() {
+function createEmptyAgentSession() {
   return { id: '', createdAt: '', lastUsedAt: '', turnCount: 0 };
 }
 
@@ -664,41 +672,43 @@ function createEmptyMemory() {
   return { updatedAt: '', summary: '', stablePreferences: [], recentTopics: [] };
 }
 
-function syncAcpSessionToQwen(app, acpSession, sessionId, isNew) {
-  if (!sessionId) return;
+function markAgentSessionTurnCompleted(app, agentSession, sessionId) {
+  if (!sessionId || agentSession.id !== sessionId) return;
+  agentSession.turnCount = Math.max(0, Number(agentSession.turnCount || 0)) + 1;
+  agentSession.lastUsedAt = new Date().toISOString();
+  writeJsonFile(getAgentSessionPath(app), agentSession);
+}
+
+function resetAgentSession(app, agentSession, sessionId = '') {
+  if (sessionId && agentSession.id && agentSession.id !== sessionId) return;
+  Object.assign(agentSession, createEmptyAgentSession());
+  writeJsonFile(getAgentSessionPath(app), agentSession);
+}
+
+function prepareAgentSessionTurn(app, agentSession) {
   const now = new Date().toISOString();
-  acpSession.id = sessionId;
-  acpSession.createdAt = (isNew || !acpSession.createdAt) ? now : acpSession.createdAt;
-  acpSession.lastUsedAt = now;
-  writeJsonFile(getAcpSessionPath(app), acpSession);
-}
-
-function markAcpSessionTurnCompleted(app, acpSession, sessionId) {
-  if (!sessionId || acpSession.id !== sessionId) return;
-  acpSession.turnCount = Math.max(0, Number(acpSession.turnCount || 0)) + 1;
-  acpSession.lastUsedAt = new Date().toISOString();
-  writeJsonFile(getAcpSessionPath(app), acpSession);
-}
-
-function resetAcpSession(app, acpSession, sessionId = '') {
-  if (sessionId && acpSession.id && acpSession.id !== sessionId) return;
-  Object.assign(acpSession, createEmptyAcpSession());
-  writeJsonFile(getAcpSessionPath(app), acpSession);
-}
-
-function prepareAcpSessionTurn(app, acpSession) {
-  const now = new Date().toISOString();
-  const isNew = !acpSession.id;
-  acpSession.id = acpSession.id || require('crypto').randomUUID();
-  acpSession.createdAt = acpSession.createdAt || now;
-  acpSession.lastUsedAt = now;
-  writeJsonFile(getAcpSessionPath(app), acpSession);
-  return { id: acpSession.id, isNew };
+  const isNew = !agentSession.id;
+  agentSession.id = agentSession.id || require('crypto').randomUUID();
+  agentSession.createdAt = agentSession.createdAt || now;
+  agentSession.lastUsedAt = now;
+  writeJsonFile(getAgentSessionPath(app), agentSession);
+  return { id: agentSession.id, isNew };
 }
 
 // ============================================================
 // Bootstrap management
 // ============================================================
+
+const BOOTSTRAP_EMPTY_VALUES = new Set(['none', 'n/a', 'na', 'null', '', 'skip', 'no preference']);
+const BOOTSTRAP_FIELDS = [
+  { id: 'assistant_name', label: 'Assistant name', hint: 'e.g., Nyx, Ava, Helper' },
+  { id: 'preferred_name', label: 'Your preferred name', hint: 'What should the assistant call you?' },
+  { id: 'nyx_role', label: 'Role', hint: 'e.g., technical assistant, creative partner, general helper' },
+  { id: 'tone_style', label: 'Tone', hint: 'e.g., formal, casual, direct, friendly' },
+  { id: 'boundaries', label: 'Boundaries', hint: 'What should the assistant avoid?' },
+  { id: 'tool_preferences', label: 'Tool preferences', hint: 'Browser, canvas, computer use?' },
+  { id: 'focus_context', label: 'Focus context', hint: 'What topics or tasks matter most?' },
+];
 
 function createDefaultBootstrapState() {
   return { active: false, startedAt: null, updatedAt: null, stepIndex: 0, currentPrompt: '', answers: {} };
@@ -742,10 +752,11 @@ function parseBootstrapReasoning(reasoning = '') {
 }
 
 function getBootstrapInitialPrompt() {
+  const fields = BOOTSTRAP_FIELDS.map((f) => `${f.label}: ${f.hint}`).join(' | ');
   return [
-    'Initial setup.',
-    'In a single reply, tell me: what you want to call the assistant, how you want it to address you, what role it should have, what tone it should use, any constraints it should follow, which tools or workflows it should prefer, and which projects or contexts it should keep in mind.',
-    'If any point does not apply, just write none or leave it open.',
+    'Initial bootstrap.',
+    `Answer these questions: ${fields}`,
+    'Reply in one response. If a point does not apply, write "none".',
   ].join(' ');
 }
 
@@ -759,7 +770,7 @@ function buildBootstrapAnswersPrompt(bootstrapState) {
   return sections.length ? `BOOTSTRAP_ANSWERS:\n${sections.join('\n')}` : '';
 }
 
-function updateBootstrapStateFromAcp(bootstrapState, reasoning = '', options = {}) {
+function updateBootstrapStateFromAgent(bootstrapState, reasoning = '', options = {}) {
   const parsed = parseBootstrapReasoning(reasoning);
   const mergedAnswers = { ...(bootstrapState.answers || {}), ...(parsed.answers || {}) };
   const missingIds = parsed.missingIds.length ? parsed.missingIds : getBootstrapMissingFieldIds(mergedAnswers);
@@ -792,13 +803,14 @@ function applyBootstrapAnswersToWorkspace(app, bootstrapState) {
   const toneStyle = normalizeLine(answers.tone_style || '', 220) || 'direct, concise, concrete';
   const boundaries = normalizeLine(answers.boundaries || '', 280) || 'avoid filler, emphatic tone, unnecessary markdown, and unverified promises';
   const toolPreferences = normalizeLine(answers.tool_preferences || '', 280) || (ENABLE_LIVE_CANVAS ? 'use browser and canvas when they add real value' : 'use browser and computer use when they add real value');
-  const focusContext = normalizeLine(answers.focus_context || '', 280) || 'local desktop workspace and user ACP workflows';
+  const focusContext = normalizeLine(answers.focus_context || '', 280) || 'local desktop workspace and user Agent workflows';
 
   writeTextFile(getWorkspaceFilePath(app, 'USER.md'), ['# USER', '', `- Preferred name: ${preferredName}`, `- Primary context: ${focusContext}`, '- Update this file with durable preferences and stable personal instructions.'].join('\n'), WORKSPACE_FILE_MAX_CHARS);
   writeTextFile(getWorkspaceFilePath(app, 'IDENTITY.md'), ['# IDENTITY', '', `- Name: ${assistantName}`, ENABLE_LIVE_CANVAS ? '- Type: desktop avatar with chat, canvas, and browser' : '- Type: desktop avatar with chat, browser, and computer use', `- Default role: ${nyxRole}`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
   writeTextFile(getWorkspaceFilePath(app, 'SOUL.md'), ['# SOUL', '', `${assistantName} is a pragmatic, clear-headed, and concrete desktop avatar.`, `Style: ${toneStyle}.`, `Constraints: ${boundaries}.`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
   writeTextFile(getWorkspaceFilePath(app, 'AGENTS.md'), ['# AGENTS', '', `- Primary operational role: ${nyxRole}.`, `- Required tone: ${toneStyle}.`, `- Default context: ${focusContext}.`, `- Hard constraints: ${boundaries}.`, '- If a stable preference emerges, suggest saving it to the workspace.'].join('\n'), WORKSPACE_FILE_MAX_CHARS);
-  writeTextFile(getWorkspaceFilePath(app, 'TOOLS.md'), ['# TOOLS', '', '- Direct ACP via Qwen CLI with session resume.', '- Real browser via PinchTab.', ...(ENABLE_LIVE_CANVAS ? ['- Side canvas for text, clipboard, files, images, video, and audio.'] : ['- Real computer use for windows, controls, and desktop input.']), `- Usage preferences: ${toolPreferences}.`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
+  writeTextFile(getWorkspaceFilePath(app, 'TOOLS.md'), ['# TOOLS', '', '- Direct brain runtime via OpenCode or Ollama.', '- Real browser via PinchTab.', ...(ENABLE_LIVE_CANVAS ? ['- Side canvas for text, clipboard, files, images, video, and audio.'] : ['- Real computer use for windows, controls, and desktop input.']), `- Usage preferences: ${toolPreferences}.`].join('\n'), WORKSPACE_FILE_MAX_CHARS);
+  writeTextFile(getWorkspaceFilePath(app, 'MEMORY.md'), ['# MEMORY', '', '- Long-term memory and important facts about the user.', '- Update this file with durable information that should persist across sessions.'].join('\n'), WORKSPACE_FILE_MAX_CHARS);
 }
 
 function completeWorkspaceBootstrap(app) {
@@ -811,7 +823,7 @@ function completeWorkspaceBootstrap(app) {
 // Local chat commands
 // ============================================================
 
-async function runLocalChatCommand(app, text, chatHistory, chatSession, acpSession, bootstrapState, workspaceState, completeWorkspaceBootstrapFn, openWorkspaceFolderFn, appendSessionFlushFn, compactCurrentSessionHistoryFn, startFreshSessionFn, resetAcpSessionFn) {
+async function runLocalChatCommand(app, text, chatHistory, chatSession, agentSession, bootstrapState, workspaceState, completeWorkspaceBootstrapFn, openWorkspaceFolderFn, appendSessionFlushFn, compactCurrentSessionHistoryFn, startFreshSessionFn, resetAgentSessionFn) {
   const rawInput = String(text || '').trim();
   const input = rawInput.toLowerCase();
 
@@ -822,6 +834,13 @@ async function runLocalChatCommand(app, text, chatHistory, chatSession, acpSessi
   if (input === '/bootstrap status') {
     const currentQuestion = bootstrapState.active ? String(bootstrapState.currentPrompt || '').trim() : '';
     return { message: createSystemMessage([`Bootstrap active: ${bootstrapState.active ? 'yes' : 'no'}`, `Bootstrap pending: ${workspaceState.bootstrapPending ? 'yes' : 'no'}`, `Round: ${Number(bootstrapState.stepIndex || 0)}`, currentQuestion ? `Current question: ${currentQuestion}` : 'Current question: none'].join('\n')), replaceHistory: false };
+  }
+  if (input === '/bootstrap') {
+    const removed = resetWorkspaceMarkdownForBootstrap(app);
+    const bootstrapPath = getWorkspaceFilePath(app, 'BOOTSTRAP.md');
+    writeTextFile(bootstrapPath, '# BOOTSTRAP\n\nRiavvio del setup iniziale.', WORKSPACE_FILE_MAX_CHARS);
+    const suffix = removed.length ? ` File workspace azzerati: ${removed.join(', ')}.` : '';
+    return { message: createSystemMessage(`Bootstrap avviato da zero.${suffix} La prossima risposta avvierà il wizard.`), replaceHistory: false };
   }
   if (input === '/workspace open') {
     const result = await openWorkspaceFolderFn(app);
@@ -845,7 +864,7 @@ async function runLocalChatCommand(app, text, chatHistory, chatSession, acpSessi
     return { message: createSystemMessage(result.ok ? `${result.path}:${result.startLine}-${result.endLine}\n${result.text || '[empty]'}` : result.error), replaceHistory: false };
   }
   if (input === '/session status') {
-    return { message: createSystemMessage([`Session: ${chatSession.id || 'none'}`, `Created: ${chatSession.createdAt || '-'}`, `Last used: ${chatSession.lastUsedAt || '-'}`, `Messages: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`, `ACP session: ${acpSession.id || 'none'}`].join('\n')), replaceHistory: false };
+    return { message: createSystemMessage([`Session: ${chatSession.id || 'none'}`, `Created: ${chatSession.createdAt || '-'}`, `Last used: ${chatSession.lastUsedAt || '-'}`, `Messages: ${chatHistory.length}`, `Compactions: ${Number(chatSession.compactionCount || 0)}`, `Agent session: ${agentSession.id || 'none'}`].join('\n')), replaceHistory: false };
   }
   if (input.startsWith('/session search ')) {
     const query = rawInput.slice('/session search '.length).trim();
@@ -857,7 +876,7 @@ async function runLocalChatCommand(app, text, chatHistory, chatSession, acpSessi
     return { message: createSystemMessage(result.ok ? 'Session compacted. Replaced the middle section with a persistent summary.' : result.error), replaceHistory: true };
   }
   if (input === '/new' || input === '/reset') {
-    startFreshSessionFn(app, chatHistory, chatSession, acpSession, 'new-session');
+    startFreshSessionFn(app, chatHistory, chatSession, agentSession, 'new-session');
     return { message: createSystemMessage('Session reset. Transcript flushed to daily note and local context cleared.'), replaceHistory: true };
   }
   return null;
@@ -908,7 +927,7 @@ module.exports = {
   getSessionMarkdownPath,
   getChatHistoryPath,
   getNyxMemoryPath,
-  getAcpSessionPath,
+  getAgentSessionPath,
   getChatSessionPath,
   getBootstrapStatePath,
   getAppFilePath,
@@ -929,6 +948,7 @@ module.exports = {
   buildDefaultWorkspaceFiles,
   ensureWorkspaceBootstrap,
   readWorkspaceState,
+  resetWorkspaceMarkdownForBootstrap,
   buildWorkspaceProjectContextPrompt,
   buildRecentDailyMemoryPrompt,
   applyWorkspaceUpdate,
@@ -942,6 +962,11 @@ module.exports = {
   runSessionSearch,
   runMemoryGet,
   resolveWorkspaceRequestPath,
+
+  // Constants
+  WORKSPACE_REQUIRED_FILES,
+  WORKSPACE_MUTABLE_FILES,
+  WORKSPACE_OPTIONAL_FILES,
 
   // Chat history
   createMessageId,
@@ -961,14 +986,13 @@ module.exports = {
   persistCurrentSessionRecord,
   appendSessionFlushToDailyMemory,
 
-  // ACP session
-  createEmptyAcpSession,
+  // Agent session
+  createEmptyAgentSession,
   createEmptyChatSession,
   createEmptyMemory,
-  syncAcpSessionToQwen,
-  markAcpSessionTurnCompleted,
-  resetAcpSession,
-  prepareAcpSessionTurn,
+  markAgentSessionTurnCompleted,
+  resetAgentSession,
+  prepareAgentSessionTurn,
 
   // Bootstrap
   createDefaultBootstrapState,
@@ -978,7 +1002,7 @@ module.exports = {
   parseBootstrapReasoning,
   getBootstrapInitialPrompt,
   buildBootstrapAnswersPrompt,
-  updateBootstrapStateFromAcp,
+  updateBootstrapStateFromAgent,
 
   // Local commands
   runLocalChatCommand,

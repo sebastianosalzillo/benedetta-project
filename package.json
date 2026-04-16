@@ -1,6 +1,6 @@
 {
   "name": "benedetta-project",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "electron/main.js",
   "scripts": {
     "dev:vite": "vite --port 5174",
@@ -8,12 +8,12 @@
     "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
     "build": "vite build",
     "start": "electron .",
-    "test:smoke": "node test_acp.js",
+    "test:smoke": "npm run test:unit -- --runInBand",
     "test:unit": "jest",
     "test:e2e": "node e2e/electron-smoke.js",
     "test:e2e:avatar": "node e2e/avatar-regression.js",
     "test:e2e:ci": "npm run build && npm run test:e2e",
-    "test": "npm run test:smoke",
+    "test": "npm run test:unit -- --runInBand",
     "bench:kokoro": "node scripts/measure_kokoro_latency.js",
     "dist": "electron-builder"
   },

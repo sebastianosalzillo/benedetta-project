@@ -1,7 +1,7 @@
 const {
   setupOrchestrator,
   agentLoop,
-  startDirectAcpRequest,
+  startDirectAgentRequest,
 } = require('../electron/agent-orchestrator');
 
 describe('agent-orchestrator phase bridge', () => {
@@ -12,7 +12,7 @@ describe('agent-orchestrator phase bridge', () => {
     setupOrchestrator({
       MAX_AGENT_TURNS: 3,
       getActiveResponseId: () => 'req-1',
-      runAcpTurn: jest.fn(async () => ({
+      runAgentTurn: jest.fn(async () => ({
         response: { sequence: [] },
         phasePlan: {
           phases: [
@@ -82,7 +82,7 @@ describe('agent-orchestrator phase bridge', () => {
 
     setupOrchestrator({
       resetBrowserAgentState: jest.fn(),
-      getSelectedBrainOption: () => ({ label: 'Qwen' }),
+      getSelectedBrainOption: () => ({ label: 'OpenCode' }),
       hasSelectedBrainLauncher: () => true,
       createMessageId: (prefix) => `${prefix}-id`,
       appendHistoryMessage: jest.fn(),
@@ -93,28 +93,28 @@ describe('agent-orchestrator phase bridge', () => {
       setTtsState: jest.fn(),
       STREAM_STATUS: { WAIT: 'wait', CONNECTED: 'connected', DISCONNECTED: 'disconnected', ERROR: 'error' },
       refreshComputerState: jest.fn(async () => null),
-      buildDirectAcpPrompt: () => 'prompt',
-      prepareAcpSessionTurn: () => ({ id: 'session-1', isNew: false }),
-      getBrainSpawnConfig: jest.fn(async () => ({ kind: 'qwen-acp' })),
+      buildDirectAgentPrompt: () => 'prompt',
+      prepareAgentSessionTurn: () => ({ id: 'session-1', isNew: false }),
+      getBrainSpawnConfig: jest.fn(async () => ({ kind: 'opencode-http' })),
       setActiveResponseId: jest.fn(),
       sendAvatarCommand: jest.fn(),
       agentLoop: jest.fn(async (requestId) => {
         activeRequest = {
           id: requestId,
-          acpSessionId: 'session-1',
+          agentSessionId: 'session-1',
           streamEmitter: { stop: jest.fn() },
         };
         return { cancelled: false, completed: true, lastResponse: null, turns: 1, toolResults: [] };
       }),
       activeChatRequest: () => activeRequest,
       setActiveChatRequest,
-      markAcpSessionTurnCompleted: jest.fn(),
+      markAgentSessionTurnCompleted: jest.fn(),
       consumeStartupBootPrompt: jest.fn(),
-      resetAcpSession: jest.fn(),
+      resetAgentSession: jest.fn(),
       stopActiveChatRequest: jest.fn(),
     });
 
-    await startDirectAcpRequest('req-cleanup', 'ciao');
+    await startDirectAgentRequest('req-cleanup', 'ciao');
 
     expect(setActiveChatRequest).toHaveBeenCalledWith(null);
     expect(activeRequest).toBe(null);

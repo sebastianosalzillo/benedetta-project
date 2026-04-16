@@ -406,7 +406,7 @@ function parseToolCallsFromResponse(responseText) {
   try {
     const parsed = JSON.parse(responseText);
 
-    // Look for segments array (ACP protocol format)
+    // Look for segments array (agent protocol format)
     if (Array.isArray(parsed.segments)) {
       for (const segment of parsed.segments) {
         if (segment.type === 'tool' || segment.action === 'tool') {

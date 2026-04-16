@@ -137,9 +137,21 @@ function getContextStats(messages) {
   };
 }
 
+/**
+ * Returns true when the chat history is approaching the compaction threshold
+ * (above 75% of MAX_CONTEXT_TOKENS) but NOT yet at the prune threshold (90%).
+ * Used to trigger a silent pre-compaction memory flush before messages are lost.
+ */
+function needsPreFlush(messages) {
+  const totalTokens = estimateTotalTokens(messages);
+  const ratio = totalTokens / MAX_CONTEXT_TOKENS;
+  return ratio >= 0.75 && ratio < 0.90;
+}
+
 module.exports = {
   pruneSessionHistory,
   smartPrune,
+  needsPreFlush,
   compactOldMessages,
   estimateMessageTokens,
   estimateTotalTokens,

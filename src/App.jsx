@@ -38,9 +38,21 @@ const DEFAULT_APP_STATE = {
   ttsStatus: 'idle',
   ttsLatencyMs: null,
   ttsLastError: null,
+  userSettings: {
+    name: '',
+    preferredName: '',
+    timezone: 'Europe/Rome',
+    privacy: '',
+    avatarName: 'Nyx',
+    toneStyle: 'pragmatic',
+    voiceStyle: 'neutral',
+    boundaries: '',
+    role: '',
+    focusContext: '',
+  },
   brain: {
-    selectedId: 'qwen',
-    selectedLabel: 'Qwen',
+    selectedId: 'opencode',
+    selectedLabel: 'OpenCode Zen',
     options: [],
     sourcePath: '',
     modelsPath: '',
@@ -141,6 +153,7 @@ function App() {
   const [activePanel, setActivePanel] = useState('chat');
   const [brainTest, setBrainTest] = useState(null);
   const [brainTestPending, setBrainTestPending] = useState(false);
+  const [debugLogs, setDebugLogs] = useState([]);
   const [messages, setMessages] = useState([]);
   const [canvasState, setCanvasState] = useState({
     isOpen: false,
@@ -385,6 +398,52 @@ function App() {
     ]);
   }
 
+  async function handleSaveUserSettings(settings) {
+    const result = await window.electronAPI?.saveUserSettings?.(settings);
+    if (!result?.ok) {
+      setMessages((current) => [...current, createSystemMessage(result?.error || 'Unable to save user settings.')]);
+      return;
+    }
+    setAppState((current) => ({
+      ...current,
+      userSettings: { ...current.userSettings, ...settings },
+    }));
+  }
+
+  async function handleSaveSoulSettings(settings) {
+    const result = await window.electronAPI?.saveSoulSettings?.(settings);
+    if (!result?.ok) {
+      setMessages((current) => [...current, createSystemMessage(result?.error || 'Unable to save soul settings.')]);
+      return;
+    }
+    setAppState((current) => ({
+      ...current,
+      userSettings: { ...current.userSettings, ...settings },
+    }));
+  }
+
+  async function handleSaveIdentitySettings(settings) {
+    const result = await window.electronAPI?.saveIdentitySettings?.(settings);
+    if (!result?.ok) {
+      setMessages((current) => [...current, createSystemMessage(result?.error || 'Unable to save identity settings.')]);
+      return;
+    }
+    setAppState((current) => ({
+      ...current,
+      userSettings: { ...current.userSettings, ...settings },
+    }));
+  }
+
+  async function handleRefreshDebugLogs() {
+    const logs = await window.electronAPI?.getDebugLogs?.();
+    setDebugLogs(logs || []);
+  }
+
+  async function handleClearDebugLogs() {
+    await window.electronAPI?.clearDebugLogs?.();
+    setDebugLogs([]);
+  }
+
   async function handleTestBrain(brainId) {
     setBrainTestPending(true);
     try {
@@ -425,7 +484,7 @@ function App() {
       <div className="hud-panel" aria-label="Nyx chat workspace">
         <div className="hud-header">
           <div>
-            <div className="eyebrow">Nyx · Avatar ACP Desktop</div>
+            <div className="eyebrow">Nyx · Avatar Desktop</div>
             <h1>{appState.brain?.selectedLabel || 'Nyx'}</h1>
           </div>
           <div
@@ -459,6 +518,13 @@ function App() {
               testResult={brainTest}
               testPending={brainTestPending}
               isBusy={Boolean(appState.activeRequestId)}
+              userSettings={appState.userSettings}
+              onSaveUserSettings={handleSaveUserSettings}
+              onSaveSoulSettings={handleSaveSoulSettings}
+              onSaveIdentitySettings={handleSaveIdentitySettings}
+              debugLogs={debugLogs}
+              onRefreshDebugLogs={handleRefreshDebugLogs}
+              onClearDebugLogs={handleClearDebugLogs}
             />
           </div>
         ) : (

@@ -111,6 +111,17 @@
     '#ui-toggle,#right,#bottom,#loading{display:none!important;}',
     '#main,#left{position:fixed!important;top:0!important;left:0!important;',
     'width:100%!important;height:100%!important;margin:0!important;}',
+    /* Status Bubble — centrato in alto, per idle / pensando / rispondendo */
+    '#nyx-status-bubble{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:10000;background:rgba(30,36,54,0.82);color:#c8d4f0;font-family:system-ui,-apple-system,sans-serif;font-size:13px;font-weight:400;padding:8px 16px;border-radius:20px;max-width:260px;word-wrap:break-word;box-shadow:0 4px 24px rgba(0,0,0,0.35);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,0.10);opacity:0;transition:opacity 0.22s ease-out;pointer-events:none;}',
+    '#nyx-status-bubble.nyxb-visible{opacity:1!important;}',
+    /* Speech Bubble — a destra, altezza testa avatar */
+    '#nyx-speech-bubble{position:fixed;top:22%;right:4%;z-index:10002;background:rgba(255,255,255,0.97);color:#131824;font-family:system-ui,-apple-system,sans-serif;font-size:14px;font-weight:500;line-height:1.5;padding:14px 18px;border-radius:18px 18px 18px 4px;max-width:220px;word-wrap:break-word;box-shadow:0 12px 40px rgba(0,0,0,0.38);backdrop-filter:blur(18px);opacity:0;transition:opacity 0.2s ease-out,transform 0.2s ease-out;transform:translateX(10px);pointer-events:none;}',
+    '#nyx-speech-bubble.nyxb-visible{opacity:1!important;transform:translateX(0)!important;}',
+    '#nyx-speech-bubble::before{content:"";position:absolute;right:100%;top:18px;border:8px solid transparent;border-right-color:rgba(255,255,255,0.97);}',
+    /* Response Popup */
+    '#nyx-response-popup{position:fixed;bottom:12%;left:50%;transform:translateX(-50%);z-index:10001;width:85%;max-width:500px;background:rgba(13,20,34,0.88);border:1px solid rgba(255,255,255,0.12);border-radius:18px;padding:16px 20px;box-shadow:0 12px 40px rgba(0,0,0,0.32),0 0 20px rgba(78,143,255,0.22);backdrop-filter:blur(20px);opacity:0;transition:opacity 0.3s ease-out,transform 0.3s ease-out;pointer-events:none;}',
+    '#nyx-response-popup.nyxb-visible{opacity:1!important;transform:translateX(-50%) translateY(0)!important;}',
+    '#nyx-response-popup p{margin:0;line-height:1.6;font-size:15px;font-weight:400;color:#e8edf7;word-wrap:break-word;overflow-wrap:break-word;}',
   ].join('');
   (document.head || document.documentElement).appendChild(styleTag);
 
@@ -130,6 +141,21 @@
     try { h.stopSpeaking(); } catch (e) {}
     try { h.setMood(mood); } catch (e) {}
     try { h.setMood(expression); } catch (e) {}
+
+    // Show speech bubble (side, head height) with current text fragment
+    showSpeechBubble(data.text || '');
+
+    // Accumulate response text in popup
+    var requestId = String(data.requestId || '').trim();
+    var textPart = data.text || '';
+    if (requestId && requestId !== _currentRequestId) {
+      _responseParts = [textPart];
+      _currentRequestId = requestId;
+    } else {
+      _responseParts.push(textPart);
+    }
+    showPopupText(_responseParts.join(' '));
+
     var bin = window.atob(data.audioBase64 || '');
     var bytes = new Uint8Array(bin.length);
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -140,13 +166,10 @@
       // automatically from the text using lipsyncPreProcessText + lipsyncWordsToVisemes
       // for the correct language (see talkinghead.mjs lines 3157-3158).
       h.speakAudio({ audio: decoded, words: [safe], wtimes: [0], wdurations: [dur] }, { avatarMute: false });
-      if (data.requestId && data.segmentId) {
-        setTimeout(function () {
-          if (window.__nyxBridge) window.__nyxBridge.notifyPlayback({ requestId: data.requestId, segmentId: data.segmentId, state: 'ended' });
-        }, dur);
-      }
+      beginSpeechTracking(h, data, dur);
     }).catch(function (err) {
       console.error('[nyx-page] decodeAudioData error', err);
+      hideSpeechBubble();
       if (data.requestId && data.segmentId && window.__nyxBridge) {
         window.__nyxBridge.notifyPlayback({ requestId: data.requestId, segmentId: data.segmentId, state: 'error' });
       }
@@ -233,29 +256,169 @@
       var m = window.__nyxMotionInternal || window.__nyxProceduralMotion;
       if (m && m.stop) m.stop(true);
     } catch (e) {}
+    hideBubble();
+    hideSpeechBubble();
+    hidePopup();
+    if (_speechEndTimer) { clearTimeout(_speechEndTimer); _speechEndTimer = null; }
+    _activeSpeechKey = null;
+    _responseParts = [];
+    _currentRequestId = null;
   }
 
   // ── Status bubble ─────────────────────────────────────────────────────────────
-  var _bubble = null, _bubbleTimer = null;
+  var _bubbleTimer = null;
+  var _speechEndTimer = null, _activeSpeechKey = null, _speechCompletedKeys = {};
+
+  // ── Response popup ────────────────────────────────────────────────────────────
+  var _responseParts = [], _currentRequestId = null;
+
+  function getOrCreatePopup(className, tag, innerHTML) {
+    var el = document.getElementById(className);
+    if (!el) {
+      el = document.createElement(tag || 'div');
+      el.id = className;
+      if (innerHTML) el.innerHTML = innerHTML;
+      (document.body || document.documentElement).appendChild(el);
+    }
+    return el;
+  }
+
+  function showPopupText(text) {
+    var popup = getOrCreatePopup('nyx-response-popup', 'div', '<p></p>');
+    var pEl = popup.querySelector && popup.querySelector('p');
+    if (!pEl) {
+      pEl = document.createElement('p');
+      popup.appendChild(pEl);
+    }
+    if (pEl) pEl.textContent = text;
+    popup.classList.add('nyxb-visible');
+  }
+
+  function hidePopup() {
+    var popup = document.getElementById('nyx-response-popup');
+    if (popup) popup.classList.remove('nyxb-visible');
+  }
 
   function showBubble(text) {
     if (!text) { hideBubble(); return; }
-    if (!_bubble) {
-      _bubble = document.createElement('div');
-      _bubble.id = 'nyx-status-bubble';
-      _bubble.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:10000;background:rgba(15,20,30,0.92);color:#c8d6e5;font-family:system-ui,-apple-system,sans-serif;font-size:14px;padding:8px 16px;border-radius:12px;max-width:80%;word-wrap:break-word;box-shadow:0 4px 20px rgba(0,0,0,0.3);opacity:0;transition:opacity 0.2s ease-out,transform 0.2s ease-out;pointer-events:none;';
-      _bubble.textContent = text;
-      (document.body || document.documentElement).appendChild(_bubble);
-      requestAnimationFrame(function () { _bubble.style.opacity = '1'; _bubble.style.transform = 'translateX(-50%) translateY(0)'; });
-    } else { _bubble.textContent = text; }
+    var bubble = document.getElementById('nyx-status-bubble');
+    if (!bubble) {
+      bubble = document.createElement('div');
+      bubble.id = 'nyx-status-bubble';
+      bubble.textContent = text;
+      (document.body || document.documentElement).appendChild(bubble);
+      requestAnimationFrame(function () { bubble.classList.add('nyxb-visible'); });
+    } else {
+      bubble.textContent = text;
+      bubble.classList.add('nyxb-visible');
+    }
+    if (_bubbleTimer) { clearTimeout(_bubbleTimer); _bubbleTimer = null; }
+  }
+
+  function scheduleBubbleHide(durationMs) {
+    if (_bubbleTimer) { clearTimeout(_bubbleTimer); _bubbleTimer = null; }
+    var safeDuration = Math.max(500, Number(durationMs) || 0);
+    _bubbleTimer = setTimeout(function () {
+      _bubbleTimer = null;
+      hideBubble();
+    }, safeDuration + 180);
+  }
+
+  function makeSpeechKey(data) {
+    var requestId = String(data && data.requestId || '').trim();
+    var segmentId = String(data && data.segmentId || '').trim();
+    return requestId && segmentId ? requestId + '::' + segmentId : '';
+  }
+
+  function completeSpeechSegment(data, state) {
+    var key = makeSpeechKey(data);
+    if (key && _speechCompletedKeys[key]) return;
+    if (key) _speechCompletedKeys[key] = true;
+    if (!key || key === _activeSpeechKey) {
+      hideSpeechBubble();
+    }
+    if (_speechEndTimer) { clearTimeout(_speechEndTimer); _speechEndTimer = null; }
+    if (data && data.requestId && data.segmentId && window.__nyxBridge) {
+      window.__nyxBridge.notifyPlayback({ requestId: data.requestId, segmentId: data.segmentId, state: state || 'ended' });
+    }
+  }
+
+  function beginSpeechTracking(h, data, durationMs) {
+    var key = makeSpeechKey(data);
+    _activeSpeechKey = key;
+    if (key) delete _speechCompletedKeys[key];
+    if (_speechEndTimer) { clearTimeout(_speechEndTimer); _speechEndTimer = null; }
+
+    var fallbackMs = Math.max(1000, Number(durationMs) || Number(data && data.expectedDurationMs) || 0) + 2500;
+    _speechEndTimer = setTimeout(function () {
+      completeSpeechSegment(data, 'ended');
+    }, fallbackMs);
+
+    var attempts = 0;
+    function attachWhenReady() {
+      if (key && _activeSpeechKey !== key) return;
+      var source = h && h.audioSpeechSource;
+      if (source && source.buffer && !source.__nyxTrackedEnd) {
+        source.__nyxTrackedEnd = true;
+        var originalOnEnded = source.onended;
+        source.onended = function () {
+          try {
+            if (typeof originalOnEnded === 'function') originalOnEnded.apply(this, arguments);
+          } finally {
+            completeSpeechSegment(data, 'ended');
+          }
+        };
+        return;
+      }
+      attempts += 1;
+      if (attempts < 80) setTimeout(attachWhenReady, 50);
+    }
+    attachWhenReady();
   }
 
   function hideBubble() {
-    if (!_bubble) return;
-    _bubble.style.opacity = '0';
-    _bubble.style.transform = 'translateX(-50%) translateY(-10px)';
-    var b = _bubble; _bubble = null;
-    setTimeout(function () { if (b && b.parentNode) b.parentNode.removeChild(b); }, 250);
+    if (_bubbleTimer) { clearTimeout(_bubbleTimer); _bubbleTimer = null; }
+    var bubble = document.getElementById('nyx-status-bubble');
+    if (!bubble) return;
+    bubble.classList.remove('nyxb-visible');
+    var b = bubble;
+    setTimeout(function () {
+      if (b && b.parentNode && !b.classList.contains('nyxb-visible')) {
+        b.parentNode.removeChild(b);
+      }
+    }, 250);
+  }
+
+  // ── Speech bubble (a lato, altezza testa) ────────────────────────────────────
+  var _speechBubbleTimer = null;
+
+  function showSpeechBubble(text) {
+    if (!text) { hideSpeechBubble(); return; }
+    var bubble = document.getElementById('nyx-speech-bubble');
+    if (!bubble) {
+      bubble = document.createElement('div');
+      bubble.id = 'nyx-speech-bubble';
+      bubble.textContent = text;
+      (document.body || document.documentElement).appendChild(bubble);
+      requestAnimationFrame(function () { bubble.classList.add('nyxb-visible'); });
+    } else {
+      bubble.textContent = text;
+      bubble.classList.add('nyxb-visible');
+    }
+    if (_speechBubbleTimer) { clearTimeout(_speechBubbleTimer); _speechBubbleTimer = null; }
+  }
+
+  function hideSpeechBubble() {
+    if (_speechBubbleTimer) { clearTimeout(_speechBubbleTimer); _speechBubbleTimer = null; }
+    var bubble = document.getElementById('nyx-speech-bubble');
+    if (!bubble) return;
+    bubble.classList.remove('nyxb-visible');
+    var b = bubble;
+    setTimeout(function () {
+      if (b && b.parentNode && !b.classList.contains('nyxb-visible')) {
+        b.parentNode.removeChild(b);
+      }
+    }, 220);
   }
 
   function handleStatus(data) {

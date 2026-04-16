@@ -96,7 +96,7 @@ const skillsTool = {
       try {
         const result = await executeSkill(matchedSkill, {
           text: args.text,
-          skills: listedSkills,
+          skills: skills,
         });
 
         if (!result.ok) {

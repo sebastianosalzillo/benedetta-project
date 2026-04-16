@@ -176,6 +176,10 @@ function mapJsonToolToSequence(jsonTool) {
       return { type: 'web_search', directive: { query: String(args.query || ''), numResults: args.numResults } };
     case 'memory_search':
       return { type: 'memory_search', directive: { query: String(args.query || ''), scope: String(args.scope || 'all') } };
+    case 'memory_get':
+      return { type: 'memory_get', directive: { path: String(args.path || ''), startLine: args.startLine, limit: args.limit } };
+    case 'memory_write':
+      return { type: 'memory_write', directive: { content: String(args.content || ''), heading: args.heading ? String(args.heading) : undefined } };
     case 'task':
       return { type: 'task', directive: { action: String(args.action || 'list'), params: args.params || {} } };
     case 'delay':

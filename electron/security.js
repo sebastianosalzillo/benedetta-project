@@ -90,7 +90,12 @@ function assertChatScreenSender(event, channel) {
 function registerValidatedIpcHandler(ipcMain, channel, handler) {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrustedIpcSender(event, channel);
-    return handler(event, ...args);
+    try {
+      return await handler(event, ...args);
+    } catch (error) {
+      console.error(`[IPC] ${channel} error:`, error.message);
+      throw error;
+    }
   });
 }
 

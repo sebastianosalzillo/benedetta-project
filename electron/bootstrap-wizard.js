@@ -6,12 +6,13 @@
  * It manages a multi-turn conversation that populates workspace files.
  *
  * This module is SELF-CONTAINED — it manages its own state and persistence.
- * It communicates with the ACP runtime via callbacks (not direct imports).
+ * It communicates with the agent runtime via callbacks (not direct imports).
  *
  * @module bootstrap-wizard
  */
 
 const path = require('path');
+const fs = require('fs');
 
 // ============================================================
 // Default state
@@ -97,12 +98,15 @@ function startWizard(initialPrompt, getBootstrapInitialPrompt, refreshWorkspaceS
 
 /**
  * Complete the bootstrap wizard.
+ * Writes BOOTSTRAP.md to the workspace so future sessions know the agent was configured.
+ *
  * @param {function(): string} getBootstrapStatePath - Function to get state path
  * @param {function(string, Object): void} writeJsonFile - Function to write JSON
  * @param {function(): void} refreshWorkspaceState - Function to refresh workspace state
  * @param {function(): void} broadcastStatus - Function to broadcast status
+ * @param {string} [workspacePath] - Workspace directory to write BOOTSTRAP.md into
  */
-function completeWizard(getBootstrapStatePath, writeJsonFile, refreshWorkspaceState, broadcastStatus) {
+function completeWizard(getBootstrapStatePath, writeJsonFile, refreshWorkspaceState, broadcastStatus, workspacePath) {
   _state.active = false;
   _state.currentPrompt = '';
   _state.updatedAt = new Date().toISOString();
@@ -110,6 +114,32 @@ function completeWizard(getBootstrapStatePath, writeJsonFile, refreshWorkspaceSt
   if (typeof writeJsonFile === 'function') {
     writeJsonFile(getBootstrapStatePath(), _state);
   }
+
+  // Write BOOTSTRAP.md so the runtime knows setup is complete and injects it into context.
+  // The model reads this to avoid repeating the setup ritual.
+  if (workspacePath) {
+    try {
+      const completedAt = new Date().toISOString().slice(0, 10);
+      const answers = _state.answers || {};
+      const answerLines = Object.entries(answers)
+        .map(([k, v]) => `- **${k}**: ${String(v).trim()}`)
+        .join('\n');
+      const content = [
+        `# Bootstrap completato — ${completedAt}`,
+        '',
+        'Il setup iniziale è stato completato. Non riproporre il wizard.',
+        '',
+        '## Risposte raccolte',
+        answerLines || '(nessuna risposta registrata)',
+        '',
+        `Completato il: ${_state.updatedAt || completedAt}`,
+      ].join('\n');
+      fs.writeFileSync(path.join(workspacePath, 'BOOTSTRAP.md'), content, 'utf8');
+    } catch (err) {
+      console.error('[bootstrap-wizard] Failed to write BOOTSTRAP.md:', err.message);
+    }
+  }
+
   if (typeof refreshWorkspaceState === 'function') {
     refreshWorkspaceState();
   }
@@ -119,10 +149,10 @@ function completeWizard(getBootstrapStatePath, writeJsonFile, refreshWorkspaceSt
 }
 
 /**
- * Update bootstrap state from ACP response.
- * Parses the ACP reasoning to extract answers and advance the wizard.
+ * Update bootstrap state from agent response.
+ * Parses the Agent reasoning to extract answers and advance the wizard.
  *
- * @param {Object} acpResponse - ACP turn response object
+ * @param {Object} AgentResponse - agent turn response object
  * @param {Object} options - Update options
  * @param {function(): void} [options.refreshWorkspaceState]
  * @param {function(): void} [options.broadcastStatus]
@@ -130,13 +160,13 @@ function completeWizard(getBootstrapStatePath, writeJsonFile, refreshWorkspaceSt
  * @param {string} [options.userDataDir]
  * @returns {{active: boolean, stepIndex: number, answers: Object}}
  */
-function updateStateFromAcp(acpResponse, options = {}) {
-  if (!acpResponse || !acpResponse.reasoning) {
+function updateStateFromAgent(AgentResponse, options = {}) {
+  if (!AgentResponse || !AgentResponse.reasoning) {
     return { active: _state.active, stepIndex: _state.stepIndex, answers: _state.answers };
   }
 
   // Parse reasoning to extract answers (implementation mirrors main.js logic)
-  const reasoning = String(acpResponse.reasoning || '');
+  const reasoning = String(AgentResponse.reasoning || '');
 
   // Try to parse JSON reasoning
   try {
@@ -256,7 +286,7 @@ module.exports = {
   // Wizard lifecycle
   startWizard,
   completeWizard,
-  updateStateFromAcp,
+  updateStateFromAgent,
   isBootstrapTurn,
 
   // Internal state reference (for direct mutation when needed)

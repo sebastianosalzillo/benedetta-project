@@ -1,6 +1,11 @@
 const {
   EMOTION_TO_AVATAR_STYLE,
 } = require('./constants');
+const {
+  applyAvatarExpressionPolicy,
+  buildSpeechArticulationGestures,
+  estimateSpeechDurationMs: estimateDurationFromText,
+} = require('./avatar-expression-policy');
 
 /**
  * Utility: Sleep for a given number of milliseconds.
@@ -169,14 +174,20 @@ function inferAvatarReaction(text) {
   if (hasAny('grazie', 'prego', 'gentile', 'piacere', 'bene', 'ottimo', 'eccellente')) return { emotion: 'happy', expression: 'happy' };
   if (hasAny('scusa', 'mi dispiace', 'errore', 'sbaglio', 'problema', 'difficile', 'triste')) return { emotion: 'sad', expression: 'sad' };
   if (hasAny('ciao', 'buongiorno', 'buonasera', 'salve')) return { emotion: 'happy', expression: 'happy' };
-  
+
   return { emotion: 'neutral', expression: 'neutral' };
 }
 
 /**
- * Build a complete animation plan (motion + duration) based on style and text.
+ * Build a complete animation plan (motion + duration + intermediate gestures)
+ * based on style, text, and optional pre-computed speech duration.
+ *
+ * @param {object} style       - Avatar act state (emotion, gesture, pose, …)
+ * @param {string} segmentText - Speech text for this segment
+ * @param {number} [speechDurationMs] - Actual audio duration if known; falls
+ *   back to text-length estimate when omitted.
  */
-function buildAvatarAnimationPlan(style, segmentText = '') {
+function buildAvatarAnimationPlan(style, segmentText = '', speechDurationMs) {
   const merged = buildActState(style, segmentText);
   const effectiveMotion = merged.motion === 'turnwalk' ? 'walking' : merged.motion;
   const effectiveMotionType = merged.motion === 'turnwalk' ? 'pose' : merged.motionType;
@@ -203,6 +214,16 @@ function buildAvatarAnimationPlan(style, segmentText = '') {
   const motionDuration = Math.max(3, Math.round((baseDurationMap[effectiveMotion] || 4) * (0.7 + merged.intensity)));
   const shouldResetMotion = Boolean(effectiveMotion) && effectiveMotionType === 'gesture';
 
+  // Compute intermediate gestures for speech articulation.
+  // Always use text-based estimate here (audio may not be available yet).
+  const estimatedDurationMs = speechDurationMs != null ? speechDurationMs : estimateDurationFromText(segmentText);
+  const articulationEntries = buildSpeechArticulationGestures(merged.emotion, segmentText, estimatedDurationMs);
+  const intermediateGestures = articulationEntries.map((g) => ({
+    gesture: g.gesture,
+    hand: g.hand,
+    delayMs: Math.max(900, Math.floor(estimatedDurationMs * g.delayFraction)),
+  }));
+
   return {
     ...merged,
     motion: effectiveMotion,
@@ -211,18 +232,20 @@ function buildAvatarAnimationPlan(style, segmentText = '') {
     shouldResetMotion,
     resetMotion: shouldResetMotion ? 'straight' : null,
     resetMotionType: shouldResetMotion ? 'pose' : null,
+    intermediateGestures,
   };
 }
 
 /**
  * Builds a complete "Act State" for internal playback tracking.
+ * Applies avatar expression policy for fallback gestures.
  */
 function buildActState(input, fallbackText = '') {
   const fallback = inferAvatarReaction(fallbackText);
   const emotion = normalizeEmotion(input?.emotion, fallback.emotion);
   const style = EMOTION_TO_AVATAR_STYLE[emotion] || EMOTION_TO_AVATAR_STYLE.neutral;
 
-  return {
+  let actState = {
     emotion,
     intensity: Number.isFinite(Number(input?.intensity)) ? Number(input.intensity) : 0.72,
     pose: input?.pose ? String(input.pose).trim().toLowerCase() : null,
@@ -234,6 +257,14 @@ function buildActState(input, fallbackText = '') {
     expression: input?.expression ? String(input.expression).trim() : style.expression,
     motionSpecified: !!(input?.motion || input?.gesture || input?.animation || input?.pose),
   };
+
+  // Apply policy if no motion specified — pass actState directly (not a wrapper)
+  if (!actState.motionSpecified) {
+    const durationMs = estimateSpeechDurationMs(fallbackText);
+    applyAvatarExpressionPolicy(actState, fallbackText, durationMs);
+  }
+
+  return actState;
 }
 
 module.exports = {

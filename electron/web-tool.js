@@ -61,7 +61,7 @@ async function webFetch(url, options = {}) {
 
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'Nyx-ACP-Desktop/0.1.0' },
+      headers: { 'User-Agent': 'Nyx-Agent-Desktop/0.1.0' },
     });
     clearTimeout(timeoutId);
 
@@ -105,7 +105,7 @@ async function webSearch(query, options = {}) {
     const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
     const response = await fetch(searchUrl, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'Nyx-ACP-Desktop/0.1.0' },
+      headers: { 'User-Agent': 'Nyx-Agent-Desktop/0.1.0' },
     });
     clearTimeout(timeoutId);
 

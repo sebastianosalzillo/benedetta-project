@@ -4,8 +4,8 @@
  * @property {string} role - Message role: 'user' | 'assistant' | 'system'
  * @property {string} text - Message content
  * @property {string} [requestId] - Associated request ID for streaming
- * @property {string} [phaseId] - ACP phase identifier
- * @property {string} [phaseKind] - ACP phase kind
+ * @property {string} [phaseId] - agent phase identifier
+ * @property {string} [phaseKind] - agent phase kind
  * @property {boolean} [streaming] - Whether message is still streaming
  * @property {boolean} [interrupted] - Whether streaming was interrupted
  * @property {string} [ts] - ISO timestamp
@@ -247,4 +247,3 @@ export function applyChatStreamEvent(messages, event) {
 
   return messages;
 }
-

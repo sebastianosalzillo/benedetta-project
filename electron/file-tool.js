@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const { LRUCache } = require('lru-cache');
+const { WORKSPACE_REQUIRED_FILES, WORKSPACE_MUTABLE_FILES } = require('./constants');
 
 const MAX_FILE_SIZE = 500000;
 const MAX_READ_LINES = 2000;
@@ -88,10 +89,10 @@ function resolveAllowedPath(filePath) {
  * @example
  * // Read entire file (first 2000 lines)
  * readTextFile('src/main.js')
- * 
+ *
  * // Read specific lines
  * readTextFile('src/main.js', { startLine: 10, endLine: 50 })
- * 
+ *
  * // Read with different encoding
  * readTextFile('data.bin', { encoding: 'base64' })
  */
@@ -164,7 +165,7 @@ function readTextFile(filePath, options = {}) {
 
 /**
  * Write a text file to disk.
- * 
+ *
  * Invalidates the read cache entry for this file if it exists.
  *
  * @param {string} filePath - Path relative to FILE_TOOL_ROOT
@@ -174,7 +175,7 @@ function readTextFile(filePath, options = {}) {
  * @example
  * // Write new file
  * writeTextFile('output.txt', 'Hello world')
- * 
+ *
  * // Fail if file exists
  * writeTextFile('output.txt', 'Hello', { overwrite: false })
  */
@@ -205,7 +206,7 @@ function writeTextFile(filePath, content, options = {}) {
 
 /**
  * Edit a file by replacing plain text or regex matches.
- * 
+ *
  * Invalidates the read cache entry for this file if edits are applied.
  *
  * @param {string} filePath - Path relative to FILE_TOOL_ROOT
@@ -214,7 +215,7 @@ function writeTextFile(filePath, content, options = {}) {
  * @example
  * // Replace first occurrence
  * editFile('config.json', { oldString: '"port": 3000', newString: '"port": 8080' })
- * 
+ *
  * // Replace all with regex
  * editFile('main.js', { oldString: 'console\\.log\\(.*\\)', newString: '// removed', regex: true, replaceAll: true })
  */
@@ -276,7 +277,7 @@ function editFile(filePath, options = {}) {
 
 /**
  * Delete a file from disk.
- * 
+ *
  * Invalidates the read cache entry for this file if it exists.
  *
  * @param {string} filePath - Path relative to FILE_TOOL_ROOT
@@ -293,7 +294,24 @@ function deleteFile(filePath) {
     return { ok: false, error: `File non trovato: ${resolvedPath}` };
   }
   try {
+    const dir = path.dirname(resolvedPath);
     fs.unlinkSync(resolvedPath);
+
+    // Cleanup empty parent directories up to FILE_TOOL_ROOT
+    let currentDir = dir;
+    const rootDir = FILE_TOOL_ROOT;
+    while (currentDir && currentDir !== rootDir && currentDir.length > rootDir.length) {
+      const entries = fs.readdirSync(currentDir);
+      if (entries.length === 0) {
+        fs.rmdirSync(currentDir);
+        currentDir = path.dirname(currentDir);
+      } else {
+        break;
+      }
+    }
+
+    // Invalidate read cache
+    fileReadCache.delete(resolvedPath);
     return { ok: true, path: resolvedPath };
   } catch (error) {
     return { ok: false, error: error.message };

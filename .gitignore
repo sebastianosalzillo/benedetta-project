@@ -68,6 +68,7 @@ $null
 .idea/
 
 # AI agent internal states
+.agents/
 .claude/
 .omx/
 tasklist.json
